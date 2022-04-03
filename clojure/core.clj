@@ -104,27 +104,27 @@
         power (:power @(:egroeg player))]
 
     (circle (:x player)
-            (:y player)
+            @(:y player)
             (inc (inc (+ player-size gun-length)))
             (:bg-colour player))
 
     (.setStroke g (BasicStroke. 1))
     (outlined-circle (:x player)
-            (:y player)
-            (+ player-size (* 1/4 gun-length))
-            (rgb-lerp Color/BLACK (:bg-colour player) 0.75))
+                     @(:y player)
+                     (+ player-size (* 1/4 gun-length))
+                     (rgb-lerp Color/BLACK (:bg-colour player) 0.75))
 
     (.setStroke g (BasicStroke. 10 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
     (let [angle (:angle @(:egroeg player))]
       (line (:x player)
-            (:y player)
+            @(:y player)
             (+ (:x player) (* gun-length (Math/sin (degrees->radians angle))))
-            (+ (:y player) (* gun-length (Math/cos (degrees->radians angle)) -1))
+            (+ @(:y player) (* gun-length (Math/cos (degrees->radians angle)) -1))
             Color/BLACK))
 
     (.setStroke g (BasicStroke. 3))
     (outlined-circle (:x player)
-                     (:y player)
+                     @(:y player)
                      player-size
                      (:colour player))
 
@@ -133,7 +133,7 @@
     (let [bounds (-> g .getFontMetrics (.getStringBounds (str power) g))]
       (.drawString g (str power)
                    (int (- (:x player) (.getCenterX bounds)))
-                   (int (- (:y player) (.getCenterY bounds)))))))
+                   (int (- @(:y player) (.getCenterY bounds)))))))
 
 (defn hit-detected-g [x1 y1 x2 y2 distance]
   (let [a (- x1 x2)
@@ -178,7 +178,7 @@
                            (range 250 -1 -10))
         trail-length (count trail-colours)]
     (loop [x (:x player)
-           y (:y player)
+           y @(:y player)
            dx (* power (Math/sin (degrees->radians angle)) bullet-power-factor)
            dy (* power (Math/cos (degrees->radians angle)) -1 bullet-power-factor)
            ddx 0
@@ -196,9 +196,10 @@
                           limit
                           (min limit 200)))
             boom?' (or boom?
-                       (when (hit-detected-g (:x other-player) (:y other-player)
+                       (when (hit-detected-g (:x other-player) @(:y other-player)
                                              x y
                                              (/ (+ bullet-size player-size) 2))
+                         (println "BOOM!!!")
                          (swap! (:egroeg other-player) assoc :dead? true)
                          true))
             booms' (when boom?
@@ -206,7 +207,7 @@
                            (let [angle (rand TAU)
                                  r (rand player-size)]
                              {:x (+ (:x other-player) (* r (Math/sin angle)))
-                              :y (+ (:y other-player) (* r (Math/cos angle)))
+                              :y (+ @(:y other-player) (* r (Math/cos angle)))
                               :c (rand-nth [Color/WHITE Color/RED Color/YELLOW Color/LIGHT_GRAY Color/ORANGE])})))]
 
         (.setStroke g (BasicStroke. 10 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
@@ -244,14 +245,14 @@
 (defn game []
   (let [players [{:name      "Player 1"
                   :x         (- width 50 (rand-int (* width 1/3)))
-                  :y         (+ (rand-int (* height 1/2)) 100)
+                  :y         (atom (+ (rand-int (* height 1/2)) 100))
                   :colour    (Color. 200 0 230)
                   :bg-colour Color/RED
                   :egroeg    (atom {:angle 0
                                     :power 50})}
                  {:name      "Player 2"
                   :x         (+ 50 (rand-int (* width 1/3)))
-                  :y         (+ (* height 1/2) (rand-int (* height 1/2)) -100)
+                  :y         (atom (+ (* height 1/2) (rand-int (* height 1/2)) -100))
                   :colour    Color/ORANGE
                   :bg-colour Color/GREEN
                   :egroeg    (atom {:angle 0
@@ -259,6 +260,13 @@
     (loop [next-players (cycle players)]
 
       (let [current-player (first next-players)]
+
+        (when (:dead? @(:egroeg current-player))
+          (println "Reborn!!!")
+          (reset! (:egroeg current-player) {:angle 0
+                                            :power 50})
+          (reset! (:y current-player) (+ (rand-int (- (- height 100) 100)) 100)))
+
         (clear-for-george current-player)
         (run! draw-player players)
         (q)
