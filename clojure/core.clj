@@ -1,7 +1,7 @@
 (ns core
   (:require [see :as see])
   (:import [java.awt.image BufferedImage]
-           [java.awt Graphics2D Color BasicStroke Font]))
+           [java.awt Graphics2D Color BasicStroke Font RenderingHints]))
 
 
 (println "Hello")
@@ -16,10 +16,10 @@
 (def current-player-state (atom nil))
 
 (defn increase-power [power]
-  (min (inc power) 100))
+  (min (inc power) 80))
 
 (defn decrease-power [power]
-  (max (dec power) -120))
+  (max (dec power) -0))
 
 (defn increase-angle [angle]
   (-> angle (/ 90) inc int (* 90)))
@@ -44,6 +44,10 @@
 (defonce image (BufferedImage. width height BufferedImage/TYPE_INT_ARGB))
 (defonce q (see/see image :key-handler-fn key-handler-fn))
 (defonce g ^Graphics2D (.getGraphics image))
+
+(.setRenderingHint g RenderingHints/KEY_ANTIALIASING RenderingHints/VALUE_ANTIALIAS_ON)
+(.setRenderingHint g RenderingHints/KEY_RENDERING RenderingHints/VALUE_RENDER_QUALITY)
+
 
 ;(def p q)
 ;(def q (constantly nil))
@@ -103,27 +107,27 @@
   (let [gun-length 40
         power (:power @(:egroeg player))]
 
-    (circle (:x player)
+    (circle @(:x player)
             @(:y player)
             (inc (inc (+ player-size gun-length)))
             (:bg-colour player))
 
     (.setStroke g (BasicStroke. 1))
-    (outlined-circle (:x player)
+    (outlined-circle @(:x player)
                      @(:y player)
                      (+ player-size (* 1/4 gun-length))
                      (rgb-lerp Color/BLACK (:bg-colour player) 0.75))
 
     (.setStroke g (BasicStroke. 10 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
     (let [angle (:angle @(:egroeg player))]
-      (line (:x player)
+      (line @(:x player)
             @(:y player)
-            (+ (:x player) (* gun-length (Math/sin (degrees->radians angle))))
+            (+ @(:x player) (* gun-length (Math/sin (degrees->radians angle))))
             (+ @(:y player) (* gun-length (Math/cos (degrees->radians angle)) -1))
             Color/BLACK))
 
     (.setStroke g (BasicStroke. 3))
-    (outlined-circle (:x player)
+    (outlined-circle @(:x player)
                      @(:y player)
                      player-size
                      (:colour player))
@@ -132,7 +136,7 @@
     (.setFont g (Font. Font/SANS_SERIF Font/BOLD (if (= power 100) 18 24)))
     (let [bounds (-> g .getFontMetrics (.getStringBounds (str power) g))]
       (.drawString g (str power)
-                   (int (- (:x player) (.getCenterX bounds)))
+                   (int (- @(:x player) (.getCenterX bounds)))
                    (int (- @(:y player) (.getCenterY bounds)))))))
 
 (defn hit-detected-g [x1 y1 x2 y2 distance]
@@ -141,7 +145,30 @@
         c (Math/sqrt (+ (* a a) (* b b)))]
     (< c distance)))
 
-(defn player-choosing-angle [player]
+(defn draw-score [player x y]
+  (.setFont g (Font. Font/SANS_SERIF Font/BOLD 24))
+  (let [score (str @(:score player))
+        colour (:colour player)
+        bounds (-> g .getFontMetrics (.getStringBounds score g))
+        circle-radius 25]
+    (.setColor g colour)
+    (.fillArc g
+              (- x circle-radius)
+              (- y circle-radius)
+              (* circle-radius 2)
+              (* circle-radius 2)
+              0 360)
+    (.setColor g Color/BLACK)
+    (.drawString g (str score)
+                 (int (- x (.getCenterX bounds)))
+                 (int (- y (.getCenterY bounds))))))
+
+(defn draw-scores [player other-player]
+  (let [sorted-players (sort-by :name [player other-player])]
+    (draw-score (first sorted-players) (- (/ width 2) 50) 50)
+    (draw-score (second sorted-players) (+ (/ width 2) 50) 50)))
+
+(defn player-choosing-angle [player other-player]
 
   ;(println "player-choosing-angle")
   (let [state (:egroeg player)]
@@ -155,6 +182,7 @@
         ; draw barrel at angle
         ;(println "------>" (:ready? @state))
         (draw-player player)
+        (draw-scores player other-player)
         (q)
         ;(println @@current-player-state)
         ;(println @state)
@@ -167,7 +195,7 @@
     ))
 
 (defn turn [player other-player]
-  (player-choosing-angle player)
+  (player-choosing-angle player other-player)
   (let [angle (:angle @(:egroeg player))
         power (:power @(:egroeg player))
         bullet-power-factor 0.2
@@ -177,7 +205,7 @@
                                   (+ p (.getBlue (:bg-colour player)))))
                            (range 250 -1 -10))
         trail-length (count trail-colours)]
-    (loop [x (:x player)
+    (loop [x @(:x player)
            y @(:y player)
            dx (* power (Math/sin (degrees->radians angle)) bullet-power-factor)
            dy (* power (Math/cos (degrees->radians angle)) -1 bullet-power-factor)
@@ -196,7 +224,7 @@
                           limit
                           (min limit 200)))
             boom?' (or boom?
-                       (when (hit-detected-g (:x other-player) @(:y other-player)
+                       (when (hit-detected-g @(:x other-player) @(:y other-player)
                                              x y
                                              (/ (+ bullet-size player-size) 2))
                          (println "BOOM!!!")
@@ -206,7 +234,7 @@
                      (conj booms
                            (let [angle (rand TAU)
                                  r (rand player-size)]
-                             {:x (+ (:x other-player) (* r (Math/sin angle)))
+                             {:x (+ @(:x other-player) (* r (Math/sin angle)))
                               :y (+ @(:y other-player) (* r (Math/cos angle)))
                               :c (rand-nth [Color/WHITE Color/RED Color/YELLOW Color/LIGHT_GRAY Color/ORANGE])})))]
 
@@ -244,34 +272,39 @@
 
 (defn game []
   (let [players [{:name      "Player 1"
-                  :x         (- width 50 (rand-int (* width 1/3)))
+                  :x         (atom (- width 50 (rand-int (* width 1/3))))
                   :y         (atom (+ (rand-int (* height 1/2)) 100))
+                  :score     (atom 0)
                   :colour    (Color. 200 0 230)
                   :bg-colour Color/RED
                   :egroeg    (atom {:angle 0
                                     :power 50})}
                  {:name      "Player 2"
-                  :x         (+ 50 (rand-int (* width 1/3)))
+                  :x         (atom (+ 50 (rand-int (* width 1/3))))
                   :y         (atom (+ (* height 1/2) (rand-int (* height 1/2)) -100))
+                  :score     (atom 0)
                   :colour    Color/ORANGE
                   :bg-colour Color/GREEN
                   :egroeg    (atom {:angle 0
                                     :power 50})}]]
     (loop [next-players (cycle players)]
 
-      (let [current-player (first next-players)]
+      (let [current-player (first next-players)
+            other-player (second next-players)]
 
         (when (:dead? @(:egroeg current-player))
           (println "Reborn!!!")
           (reset! (:egroeg current-player) {:angle 0
                                             :power 50})
-          (reset! (:y current-player) (+ (rand-int (- (- height 100) 100)) 100)))
+          (reset! (:y current-player) (+ (rand-int (- (- height 100) 100)) 100))
+          (reset! (:x current-player) (+ (rand-int (- (- width 100) 100)) 100))
+          (swap! (:score other-player) inc))
 
         (clear-for-george current-player)
         (run! draw-player players)
         (q)
 
-        (turn current-player (second next-players)))
+        (turn current-player other-player))
 
       ;(Thread/sleep 1000)
       (when-not (some :quit? (map deref (map :egroeg players)))
