@@ -168,6 +168,9 @@
     (draw-score (first sorted-players) (- (/ width 2) 50) 50)
     (draw-score (second sorted-players) (+ (/ width 2) 50) 50)))
 
+(defn draw-black-hole []
+  (circle (/ width 2) (/ height 2) 50 Color/BLACK))
+
 (defn player-choosing-angle [player other-player]
 
   ;(println "player-choosing-angle")
@@ -182,6 +185,7 @@
         ; draw barrel at angle
         ;(println "------>" (:ready? @state))
         (draw-player player)
+        (draw-black-hole)
         (draw-scores player other-player)
         (q)
         ;(println @@current-player-state)
@@ -193,6 +197,23 @@
       )
     ;(println "loop ended")
     ))
+
+(def gravity 0.1)
+
+(defn angle-and-distance [x1 y1 x2 y2]
+  (let [x-diff (- x1 x2)
+        y-diff (- y1 y2)
+        angle (Math/atan2 y-diff x-diff)
+        distance (Math/sqrt (+ (* x-diff x-diff)
+                               (* y-diff y-diff)))]
+    [angle (/ distance 10)]))
+
+(defn calculate-gravity [x y mass]
+  (let [[angle distance] (angle-and-distance x y (/ width 2) (/ height 2))
+        force (/ mass (* distance distance))
+        force-x (* force (Math/cos angle))
+        force-y (* force (Math/sin angle))]
+    [force-x force-y]))
 
 (defn turn [player other-player]
   (player-choosing-angle player other-player)
@@ -210,15 +231,25 @@
            dx (* power (Math/sin (degrees->radians angle)) bullet-power-factor)
            dy (* power (Math/cos (degrees->radians angle)) -1 bullet-power-factor)
            ddx 0
-           ddy 0.1
+           ddy gravity
            limit 1000
            trail []
            boom? false
            booms nil]
-      (let [x' (+ x dx)
-            y' (+ y dy)
-            dx' (+ dx ddx)
-            dy' (+ dy ddy)
+      (let [
+
+            [gravity-x gravity-y] (map - (calculate-gravity x y 100))
+
+            ;_ (println (/ width 2) (/ height 2) x y gravity-x gravity-y)
+
+            ddx' gravity-x
+            ddy' (+ #_gravity gravity-y)
+            dx' (+ dx ddx')
+            dy' (+ dy ddy')
+            x' (+ x dx')
+            y' (+ y dy')
+
+
             limit' (dec (if (and (< y (+ bullet-size height))
                                  (< 0 x width))
                           limit
@@ -238,6 +269,9 @@
                               :y (+ @(:y other-player) (* r (Math/cos angle)))
                               :c (rand-nth [Color/WHITE Color/RED Color/YELLOW Color/LIGHT_GRAY Color/ORANGE])})))]
 
+        (.setStroke g (BasicStroke. 1))
+        (line x y (+ x (* gravity-x 100)) (+ y (* gravity-y 100)) Color/BLUE)
+
         (.setStroke g (BasicStroke. 10 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
         (doseq [[colour [[x1 y1] [x2 y2]]] (map vector trail-colours (partition 2 1 trail))]
           (when x1
@@ -256,7 +290,7 @@
         (when (and #_(< y (+ bullet-size height))
                    (pos? limit')
                    (not (:quit? @(:egroeg player))))
-          (recur x' y' dx' dy' ddx ddy
+          (recur x' y' dx' dy' ddx' ddy'
                  limit'
                  (take trail-length (cons (when-not boom?' [x' y']) trail))
                  boom?' booms'))
