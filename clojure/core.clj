@@ -1,20 +1,26 @@
 (ns core
   (:require [see :as see]
-            [clojure.core.async :as async])
+            [clojure.core.async :as async]
+            [clojure.string :as string])
   (:import [java.awt.image BufferedImage]
            [java.awt Graphics2D Color BasicStroke Font RenderingHints]))
 
 
-(println "Hello")
-
 (def TAU (* Math/PI 2))
+
+(defmacro destr [java-object & accessors]
+  (let [fields (map (fn [accessor]
+                      (list accessor java-object)) accessors)]
+    `[~@fields]))
+
+(defn but-nth [n coll]
+  (concat (take n coll)
+          (drop (inc n) coll)))
 
 (def width 2200)
 (def height 1400)
 (def player-size 40)
-(def bullet-size 10)
-
-(def current-player-state (atom nil))
+(def bullet-size 4)
 
 (defn increase-power [power]
   (min (inc power) 80))
@@ -28,20 +34,6 @@
 (defn decrease-angle [angle]
   (-> angle (/ 90) dec int (* 90)))
 
-(defn key-handler-fn [key-code]
-  (when-let [player-state @current-player-state]
-    (case key-code
-      37 (swap! player-state update :angle dec)
-      38 (swap! player-state update :power increase-power)
-      33 (swap! player-state update :angle increase-angle)
-      34 (swap! player-state update :angle decrease-angle)
-      39 (swap! player-state update :angle inc)
-      40 (swap! player-state update :power decrease-power)
-      10 (swap! player-state assoc :ready? true)
-      27 (swap! player-state assoc :quit? true)
-      (println key-code))
-    #_(println @player-state)))
-
 (defonce key-chan (async/chan (async/dropping-buffer 10)))
 
 (defn key-handler-fn [key-code]
@@ -53,10 +45,6 @@
 
 (.setRenderingHint g RenderingHints/KEY_ANTIALIASING RenderingHints/VALUE_ANTIALIAS_ON)
 (.setRenderingHint g RenderingHints/KEY_RENDERING RenderingHints/VALUE_RENDER_QUALITY)
-
-
-;(def p q)
-;(def q (constantly nil))
 
 
 (defn rgb
@@ -132,42 +120,6 @@
 (defn degrees->radians [degrees]
   (-> degrees (/ 360) (* TAU)))
 
-(defn draw-player [player]
-  (let [gun-length 40
-        power (:power @(:egroeg player))]
-
-    (circle @(:x player)
-            @(:y player)
-            (inc (inc (+ player-size gun-length)))
-            (:bg-colour player))
-
-    (.setStroke g (BasicStroke. 1))
-    (outlined-circle @(:x player)
-                     @(:y player)
-                     (+ player-size (* 1/4 gun-length))
-                     (rgba-lerp Color/BLACK (:bg-colour player) 0.75))
-
-    (.setStroke g (BasicStroke. 10 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
-    (let [angle (:angle @(:egroeg player))]
-      (line @(:x player)
-            @(:y player)
-            (+ @(:x player) (* gun-length (Math/sin (degrees->radians angle))))
-            (+ @(:y player) (* gun-length (Math/cos (degrees->radians angle)) -1))
-            Color/BLACK))
-
-    (.setStroke g (BasicStroke. 3))
-    (outlined-circle @(:x player)
-                     @(:y player)
-                     player-size
-                     (:colour player))
-
-    (.setColor g Color/BLACK)
-    (.setFont g (Font. Font/SANS_SERIF Font/BOLD (if (= power 100) 18 24)))
-    (let [bounds (-> g .getFontMetrics (.getStringBounds (str power) g))]
-      (.drawString g (str power)
-                   (int (- @(:x player) (.getCenterX bounds)))
-                   (int (- @(:y player) (.getCenterY bounds)))))))
-
 (defn hit-detected-g [x1 y1 x2 y2 distance]
   (let [a (- x1 x2)
         b (- y1 y2)
@@ -178,63 +130,7 @@
   (and (< margin x (- width margin))
        (< margin y (- height margin))))
 
-(defn draw-score [player x y]
-  (.setFont g (Font. Font/SANS_SERIF Font/BOLD 24))
-  (let [score (str @(:score player))
-        colour (:colour player)
-        bounds (-> g .getFontMetrics (.getStringBounds score g))
-        circle-radius 25]
-    (.setColor g colour)
-    (.fillArc g
-              (- x circle-radius)
-              (- y circle-radius)
-              (* circle-radius 2)
-              (* circle-radius 2)
-              0 360)
-    (.setColor g Color/BLACK)
-    (.drawString g (str score)
-                 (int (- x (.getCenterX bounds)))
-                 (int (- y (.getCenterY bounds))))))
-
-(defn draw-scores [player other-player]
-  (let [sorted-players (sort-by :name [player other-player])]
-    (draw-score (first sorted-players) (- (/ width 2) 50) 50)
-    (draw-score (second sorted-players) (+ (/ width 2) 50) 50)))
-
-(defn draw-black-hole [x y]
-  (circle x y 50 Color/BLACK))
-
-(defn player-choosing-angle [player other-player]
-
-  ;(println "player-choosing-angle")
-  (let [state (:egroeg player)]
-    (swap! state assoc :ready? false)
-    (reset! current-player-state state)
-
-    ;(println "looping...")
-    (loop []
-      (when-not (or (:ready? @state)
-                    (:quit? @state))
-        ; draw barrel at angle
-        ;(println "------>" (:ready? @state))
-        (draw-player player)
-        (draw-black-hole (/ width 2) (/ height 2))
-        (draw-black-hole (* width 4/5) (* height 1/5))
-        (draw-scores player other-player)
-        (q)
-        ;(println @@current-player-state)
-        ;(println @state)
-        ;(println player)
-
-        (Thread/sleep 100)
-        (recur))
-      )
-    ;(println "loop ended")
-    ))
-
-(def gravity 0.1)
-
-(defn angle-and-distance [x1 y1 x2 y2]
+(defn angle-and-distance [[x1 y1] [x2 y2]]
   (let [x-diff (- x1 x2)
         y-diff (- y1 y2)
         angle (Math/atan2 y-diff x-diff)
@@ -242,146 +138,12 @@
                                (* y-diff y-diff)))]
     [angle (/ distance 10)]))
 
-(defn calculate-gravity [mx my size x y]
-  (let [[angle distance] (angle-and-distance x y mx my)
+(defn calculate-gravity [mp size p]
+  (let [[angle distance] (angle-and-distance p mp)
         force (/ size (* distance distance))
         force-x (* force (Math/cos angle))
         force-y (* force (Math/sin angle))]
     [force-x force-y]))
-
-(defn turn [player other-player]
-  (player-choosing-angle player other-player)
-  (let [angle (:angle @(:egroeg player))
-        power (:power @(:egroeg player))
-        bullet-power-factor 0.2
-        trail-colours (map (fn [p]
-                             (rgb (+ p (.getRed (:bg-colour player)))
-                                  (+ p (.getGreen (:bg-colour player)))
-                                  (+ p (.getBlue (:bg-colour player)))))
-                           (range 250 -1 -10))
-        trail-length (count trail-colours)]
-    (loop [x @(:x player)
-           y @(:y player)
-           dx (* power (Math/sin (degrees->radians angle)) bullet-power-factor)
-           dy (* power (Math/cos (degrees->radians angle)) -1 bullet-power-factor)
-           ddx 0
-           ddy gravity
-           limit 1000
-           trail []
-           boom? false
-           booms nil]
-      (let [
-
-            [gravity-x gravity-y] (map - (map +
-                                              (calculate-gravity (/ width 2) (/ height 2) 100 x y)
-                                              (calculate-gravity (* width 4/5) (* height 1/5) 100 x y)))
-
-            ;_ (println (/ width 2) (/ height 2) x y gravity-x gravity-y)
-
-            ddx' gravity-x
-            ddy' (+ #_gravity gravity-y)
-            dx' (+ dx ddx')
-            dy' (+ dy ddy')
-            x' (+ x dx')
-            y' (+ y dy')
-
-
-            limit' (dec (if (and (< y (+ bullet-size height))
-                                 (< 0 x width))
-                          limit
-                          (min limit 200)))
-            boom?' (or boom?
-                       (when (hit-detected-g @(:x other-player) @(:y other-player)
-                                             x y
-                                             (/ (+ bullet-size player-size) 2))
-                         (println "BOOM!!!")
-                         (swap! (:egroeg other-player) assoc :dead? true)
-                         true))
-            booms' (when boom?
-                     (conj booms
-                           (let [angle (rand TAU)
-                                 r (rand player-size)]
-                             {:x (+ @(:x other-player) (* r (Math/sin angle)))
-                              :y (+ @(:y other-player) (* r (Math/cos angle)))
-                              :c (rand-nth [Color/WHITE Color/RED Color/YELLOW Color/LIGHT_GRAY Color/ORANGE])})))]
-
-        (.setStroke g (BasicStroke. 1))
-        (line x y (+ x (* gravity-x 100)) (+ y (* gravity-y 100)) Color/BLUE)
-
-        (.setStroke g (BasicStroke. 10 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
-        (doseq [[colour [[x1 y1] [x2 y2]]] (map vector trail-colours (partition 2 1 trail))]
-          (when x1
-            (line x1 y1 x2 y2 colour)))
-
-        (when-not boom?'
-          (circle x y bullet-size Color/BLUE))
-
-        (run! draw-player [player other-player])
-
-        (doseq [[idx {:keys [x y c]}] (reverse (map-indexed vector booms))]
-          (circle x y idx (rgba-lerp c (:bg-colour player) (/ (count booms) 150))))
-
-        (q)
-        (Thread/sleep 10)
-        (when (and #_(< y (+ bullet-size height))
-                   (pos? limit')
-                   (not (:quit? @(:egroeg player))))
-          (recur x' y' dx' dy' ddx' ddy'
-                 limit'
-                 (take trail-length (cons (when-not boom?' [x' y']) trail))
-                 boom?' booms'))
-        )))
-
-  ;(Thread/sleep 3000)
-  )
-
-
-(defn clear-for-george [player]
-  (.setColor g (:bg-colour player))
-  (.fillRect g 0 0 width height))
-
-(defn game []
-  (let [players [{:name      "Player 1"
-                  :x         (atom (- width 50 (rand-int (* width 1/3))))
-                  :y         (atom (+ (rand-int (* height 1/2)) 100))
-                  :score     (atom 0)
-                  :colour    (Color. 200 0 230)
-                  :bg-colour Color/RED
-                  :egroeg    (atom {:angle 0
-                                    :power 50})}
-                 {:name      "Player 2"
-                  :x         (atom (+ 50 (rand-int (* width 1/3))))
-                  :y         (atom (+ (* height 1/2) (rand-int (* height 1/2)) -100))
-                  :score     (atom 0)
-                  :colour    Color/ORANGE
-                  :bg-colour Color/GREEN
-                  :egroeg    (atom {:angle 0
-                                    :power 50})}]]
-    (loop [next-players (cycle players)]
-
-      (let [current-player (first next-players)
-            other-player (second next-players)]
-
-        (when (:dead? @(:egroeg current-player))
-          (println "Reborn!!!")
-          (reset! (:egroeg current-player) {:angle 0
-                                            :power 50})
-          (reset! (:y current-player) (+ (rand-int (- (- height 100) 100)) 100))
-          (reset! (:x current-player) (+ (rand-int (- (- width 100) 100)) 100))
-          (swap! (:score other-player) inc))
-
-        (clear-for-george current-player)
-        (run! draw-player players)
-        (q)
-
-        (turn current-player other-player))
-
-      ;(Thread/sleep 1000)
-      (when-not (some :quit? (map deref (map :egroeg players)))
-        (recur (rest next-players))))
-
-    (clear-for-george {:bg-colour Color/WHITE})
-    (q)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -408,23 +170,134 @@
      :lifecycle lifecycle
      :color     color}))
 
+(defmulti tick :current-phase)
+
 (defn initial-state [width height player-names player-colors]
-  {:width          width
-   :height         height
-   :players        (mapv (fn [player-name player-color]
-                           {:label (subs player-name 0 (min 20 (count player-name)))
-                            :p     (random-location width height []) ; TODO: anti-targets!
-                            :size  (+ player-radius gun-length)
-                            :score 0
-                            :color (Color. (Integer/decode player-color))
-                            :angle 0
-                            :power 50})
-                         player-names
-                         player-colors)
-   :bg-color       Color/GRAY
-   :current-player 0
-   :current-phase  :aiming
-   :black-holes    [(new-black-hole [(* width 1/2) (* height 1/2)])]})
+  (let [info-height 50
+        game-width width
+        game-height (- height info-height)]
+    {:width          game-width
+     :height         game-height
+     :info-height    info-height
+     :players        (mapv (fn [player-name player-color]
+                             {:label (subs player-name 0 (min 20 (count player-name)))
+                              :p     (random-location game-width game-height []) ; TODO: anti-targets!
+                              :size  (+ player-radius gun-length)
+                              :score 0
+                              :color (Color. (Integer/decode player-color))
+                              :angle 0
+                              :power 50})
+                           player-names
+                           player-colors)
+     :bg-color       Color/GRAY
+     :current-player 0
+     :current-phase  :aiming
+     :black-holes    [(new-black-hole [(* game-width 1/2) (* game-height 1/2)])]}
+    {:width         game-width
+     :height        game-height
+     :info-height   info-height
+     :players       [{:label "Start game" :kind :start}
+                     {:label "Add a new player" :kind :add}
+                     {:label "You" :kind :human}
+                     {:label "Me" :kind :ai}]
+     :current-player 0
+     :bg-color      Color/GRAY
+     :current-phase :setup}))
+
+(def colors
+  (for [h (range 0.0 2.9 0.3)]
+    (Color/getHSBColor h 1.0 1.0)))
+
+(defn initialize-players [players game-width game-height]
+  (->> players
+       (filter (comp #{:human :ai} :kind))
+       (mapv #(assoc % :size (+ player-radius gun-length)
+                       :score 0))
+       (reduce
+         (fn [output-players input-player]
+           (conj output-players
+                 (assoc input-player :p (random-location game-width game-height output-players))))
+         [])
+       (mapv (fn [color {:keys [p] :as player}]
+               (assoc player :color color
+                             :angle (first (angle-and-distance p [(/ game-width 2) (/ game-height 2)]))
+                             :power 50))
+             colors)))
+
+(defn await-entry [{:keys [current-player players width height] :as state}]
+  (if-let [key-code (async/<!! key-chan)]
+    (do
+      (println key-code)
+      (case key-code
+        ;37 (update-in state [:players current-player :angle] dec)
+        38 (assoc state :current-player (mod (dec current-player) (count players)))
+        ;33 (update-in state [:players current-player :angle] increase-angle)
+        ;34 (update-in state [:players current-player :angle] decrease-angle)
+        ;39 (update-in state [:players current-player :angle] inc)
+        40 (assoc state :current-player (mod (inc current-player) (count players)))
+        8 (if (= :human (get-in state [:players current-player :kind]))
+            (update-in state [:players current-player :label] (fn [x] (subs x 0 (max 0 (dec (count x))))))
+            state)
+        10 (do
+             (println current-player ": " (get-in state [:players current-player]))
+             (case (get-in state [:players current-player :kind])
+             :human (assoc-in state [:players current-player :kind] :ai)
+             :ai (assoc-in state [:players current-player :kind] :human)
+             :add (update state :players conj {:label "Also Me" :kind :ai})
+             :start (-> state
+                        (update :players initialize-players width height)
+                        (assoc :black-holes [(new-black-hole [(* width 1/2) (* height 1/2)])]
+                               :current-phase :aiming))))
+        127 (if (#{:human :ai} (get-in state [:players current-player :kind]))
+              (-> state
+                  (update :players (comp vec (partial but-nth current-player)))
+                  (assoc :current-player 0))
+              state)
+        ;27 (assoc state :current-phase :exit!)
+        81 (assoc state :current-phase :exit!)
+        (if (or (<= 65 key-code 90)
+                (= key-code 32))
+          (if (= :human (get-in state [:players current-player :kind]))
+            (update-in state [:players current-player :label] (fn [x]
+                                                                (some-> (str x (char key-code)) string/capitalize)))
+            state)
+          (do
+            (println key-code)
+            state))))
+    (assoc state :current-phase :exit!)))
+
+(defmethod tick :setup [{:keys [players current-player width height info-height] :as state}]
+  (.setColor g Color/WHITE)
+  (.fillRect g 0 0 width (+ height info-height))
+  (.setFont g (Font. Font/SANS_SERIF Font/BOLD 40))
+
+  (doseq [[idx {:keys [label kind]}] (map-indexed vector players)]
+    (let [selected? (= idx current-player)
+          text (if (= :ai kind) (str label " (AI)") label)
+          xc (/ width 2)
+          yc (+ 100 (* (/ (- height 200) (count players)) idx))
+          [center-x center-y label-w label-h] (-> g .getFontMetrics (.getStringBounds text g)
+                                                  (destr .getCenterX .getCenterY .getWidth .getHeight))]
+      (when selected?
+        (.setColor g (Color. (Integer/decode "#58FF58")))
+        (.fillRoundRect g
+                        (int (- xc center-x 20))
+                        (int (- yc center-y 10))
+                        (int (+ label-w 40))
+                        (int (+ label-h 40))
+                        40 40)
+        (.setColor g (Color. (Integer/decode "#000000")))
+        (.drawString g
+                     (str "▲ ▼ ⏎" (when (= kind :human) " [a-z] ⌫ ⌦"))
+                     (int (+ xc center-x 50))
+                     (int (- yc center-y (- label-h)))))
+
+      (.setColor g Color/BLACK)
+      (.drawString g text
+                   (int (- xc center-x))
+                   (int (- yc center-y (- label-h))))))
+  (q)
+  (await-entry state))
 
 (defn render-players [{:keys [players current-player bg-color current-phase]}]
   (doseq [[idx {:keys [p color angle power]}] (map-indexed vector players)]
@@ -447,7 +320,7 @@
               (second p)
               (+ (first p) (* pf (Math/sin (degrees->radians angle))))
               (+ (second p) (* pf (Math/cos (degrees->radians angle)) -1))
-              (Color. 255 (+ 95 (* power 2)) 0)))
+              (Color. 255 (int (+ 95 (* power 2))) 0)))
 
       (.setStroke g (BasicStroke. 3))
       (outlined-circle p player-radius color)
@@ -461,8 +334,6 @@
                        (int (- x (.getCenterX bounds)))
                        (int (inc (- y (.getCenterY bounds))))))))))
 
-(defmulti tick :current-phase)
-
 (defn render-black-holes [{:keys [black-holes]}]
   (doseq [{:keys [p size]} black-holes]
     (let [[x y] p]
@@ -470,35 +341,34 @@
                                Color/BLACK
                                Color/WHITE)))))
 
-(defmacro destr [java-object & accessors]
-  (let [fields (map (fn [accessor]
-                    (list accessor java-object)) accessors)]
-    `[~@fields]))
-
-(defn render-scores [{:keys [players]}]
+(defn render-scores [{:keys [players width height info-height]}]
   (.setFont g (Font. Font/SANS_SERIF Font/BOLD 24))
-  (doseq [[idx {:keys [score color label]}] (map-indexed vector players)]
-    (let [corner-diameter 28
-          v-inset 5
-          h-inset 10
-          xc (+ (* width 1/5) (* width 2/5 (/ idx (dec (count players)))))
-          yc 50
-          text (str label ": " score)
-          [width height center-x center-y] (-> g .getFontMetrics (.getStringBounds text g)
-                                               (destr .getWidth .getHeight .getCenterX .getCenterY))
-          width (+ width h-inset h-inset)
-          height (+ height v-inset v-inset)
-          left (- xc (/ width 2))
-          top (- yc (/ height 2))]
-      ;(circle xc yc 25 color)
-      (.setColor g color)
-      (.fillRoundRect g left top width height corner-diameter corner-diameter)
-      (.setStroke g (BasicStroke. 1))
-      (.setColor g Color/BLACK)
-      (.drawRoundRect g left top width height corner-diameter corner-diameter)
-      (.drawString g text
-                   (int (- xc center-x))
-                   (int (- yc center-y))))))
+  (let [weapon-section 500
+        player-width (/ (- width weapon-section) (count players))]
+    (.setColor g Color/DARK_GRAY)
+    (.fillRect g 0 height width info-height)
+    (.setColor g Color/BLACK)
+    (.fillRect g (- width weapon-section) height weapon-section info-height)
+    (doseq [[idx {:keys [score color label]}] (reverse (map-indexed vector players))]
+      (let [corner-diameter 40
+            h-inset 15
+            xc (* player-width (+ idx 1/2))
+            yc (+ height (/ info-height 2))
+            text (str label ": " score)
+            [width center-x center-y] (-> g .getFontMetrics (.getStringBounds text g)
+                                          (destr .getWidth .getCenterX .getCenterY))
+            label-width (+ width h-inset h-inset)
+            label-height info-height
+            left (- xc (/ label-width 2))
+            top (- yc (/ label-height 2))]
+        (.setColor g color)
+        (.fillRoundRect g (- left player-width) top (+ label-width player-width) label-height corner-diameter corner-diameter)
+        (.setStroke g (BasicStroke. 1))
+        (.setColor g Color/BLACK)
+        (.drawRoundRect g (- left player-width) top (+ label-width player-width) label-height corner-diameter corner-diameter)
+        (.drawString g text
+                     (int (- xc center-x))
+                     (int (- yc center-y)))))))
 
 (defn await-command [{:keys [current-player] :as state}]
   (if-let [key-code (async/<!! key-chan)]
@@ -510,7 +380,8 @@
       39 (update-in state [:players current-player :angle] inc)
       40 (update-in state [:players current-player :power] decrease-power)
       10 (assoc state :current-phase :firing)
-      27 (assoc state :current-phase :exit!)
+      ;27 (assoc state :current-phase :exit!)
+      81 (assoc state :current-phase :exit!)
       (do (println key-code)
           state))
     (assoc state :current-phase :exit!)))
@@ -522,18 +393,14 @@
   (q)
   (await-command state))
 
-(defn clear [{:keys [bg-color]}]
+(defn clear [{:keys [bg-color width height info-height]}]
   (.setColor g bg-color)
-  (.fillRect g 0 0 width height)
+  (.fillRect g 0 0 width (+ height info-height))
   (q))
 
 (def bullet-power-factor 0.2)
 
-(defn but-nth [n coll]
-  (concat (take n coll)
-          (drop (inc n) coll)))
-
-(defmethod tick :firing [{:keys [current-player bg-color players] :as state}]
+(defmethod tick :firing [{:keys [current-player players] :as state}]
   (let [{:keys [angle power color p]} (get-in state [:players current-player])
         trail-config (map (fn [p]
                             {:color (rgb-lerp color Color/DARK_GRAY p)
@@ -558,15 +425,12 @@
                               :booms           nil}
                  :current-phase :projecting)))
 
-(def bullet-size 4)
-
 (defmethod tick :projecting [{:keys [projection black-holes bg-color width height players] :as state}]
   (let [{:keys [targets p dp trail-config bullet-colors limit trail enemy-hit-index booms]} projection
         trail-length (count trail-config)
         [x y] p
         ddp (reduce (fn [acc black-hole]
-                      (let [[bh-x bh-y] (:p black-hole)]
-                        (map - acc (calculate-gravity bh-x bh-y (:size black-hole) x y))))
+                      (map - acc (calculate-gravity (:p black-hole) (:size black-hole) p)))
                     [0 0]
                     black-holes)
         dp' (map + dp ddp)
@@ -597,7 +461,7 @@
 
     ;(.setStroke g (BasicStroke. 2 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
 
-    (doseq [[{:keys [color width]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail))
+    (doseq [[{:keys [width]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail))
             :when x1]
       (.setStroke g (BasicStroke. (+ width 2)))
       (line x1 y1 x2 y2 bg-color))
@@ -660,7 +524,7 @@
     (assoc hole :size (first lifecycle)
                 :lifecycle (rest lifecycle))))
 
-(defmethod tick :progressing [{:keys [players enemy-hit-index current-player black-holes] :as state}]
+(defmethod tick :progressing [{:keys [players enemy-hit-index current-player black-holes width height] :as state}]
   (while (async/poll! key-chan))
   (-> (if enemy-hit-index
         (-> state
@@ -708,10 +572,14 @@
 ; * shots don't completely destroy you
 ; destroyable barriers
 ; crates
+; explosions way too big
 
-(comment
+(defn play! []
   (future
     (try
       (x)
       (catch Exception e
         (.printStackTrace e)))))
+
+(comment
+  (play!))
