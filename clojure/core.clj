@@ -370,21 +370,30 @@
                      (int (- xc center-x))
                      (int (- yc center-y)))))))
 
-(defn await-command [{:keys [current-player] :as state}]
-  (if-let [key-code (async/<!! key-chan)]
-    (case key-code
-      37 (update-in state [:players current-player :angle] dec)
-      38 (update-in state [:players current-player :power] increase-power)
-      33 (update-in state [:players current-player :angle] increase-angle)
-      34 (update-in state [:players current-player :angle] decrease-angle)
-      39 (update-in state [:players current-player :angle] inc)
-      40 (update-in state [:players current-player :power] decrease-power)
-      10 (assoc state :current-phase :firing)
-      ;27 (assoc state :current-phase :exit!)
-      81 (assoc state :current-phase :exit!)
-      (do (println key-code)
-          state))
-    (assoc state :current-phase :exit!)))
+(defn await-command [{:keys [players current-player] :as state}]
+  (let [{:keys [kind p]} (nth players current-player)]
+    (if (= kind :ai)
+      (let [target (rand-nth (but-nth current-player players))]
+        (Thread/sleep 1000)
+        (-> state
+            (assoc-in [:players current-player :angle] (-> (first (angle-and-distance p (:p target)))
+                                                           (/ TAU) (* 360) (- 90) (+ (rand-int 11) -5)))
+            (assoc-in [:players current-player :power] (+ 5 (rand-int 75)))
+            (assoc :current-phase :firing)))
+      (if-let [key-code (async/<!! key-chan)]
+        (case key-code
+          37 (update-in state [:players current-player :angle] dec)
+          38 (update-in state [:players current-player :power] increase-power)
+          33 (update-in state [:players current-player :angle] increase-angle)
+          34 (update-in state [:players current-player :angle] decrease-angle)
+          39 (update-in state [:players current-player :angle] inc)
+          40 (update-in state [:players current-player :power] decrease-power)
+          10 (assoc state :current-phase :firing)
+          ;27 (assoc state :current-phase :exit!)
+          81 (assoc state :current-phase :exit!)
+          (do (println key-code)
+              state))
+        (assoc state :current-phase :exit!)))))
 
 (defmethod tick :aiming [state]
   (render-players state)
