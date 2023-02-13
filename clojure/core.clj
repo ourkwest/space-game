@@ -22,7 +22,6 @@
 
 (def width 2200)
 (def height 1400)
-(def player-size 40)
 (def bullet-size 4)
 
 (defn increase-power [power]
@@ -100,6 +99,17 @@
              (int (* radius 2))
              0 360)))
 
+(defn lined-circle
+  ([[x y] radius color] (lined-circle x y radius color))
+  ([x y radius color]
+   (.setColor g color)
+   (.drawArc g
+             (int (- x radius))
+             (int (- y radius))
+             (int (inc (* radius 2)))
+             (int (inc (* radius 2)))
+             0 360)))
+
 (defn outlined-circle
   ([[x y] radius color] (outlined-circle x y radius color))
   ([x y radius color]
@@ -111,8 +121,8 @@
              (int (inc (* radius 2))) 0 360)
    (.setColor g Color/BLACK)
    (.drawArc g
-             (int (- (int x) radius))
-             (int (- (int y) radius))
+             (int (- x radius))
+             (int (- y radius))
              (int (inc (* radius 2)))
              (int (inc (* radius 2))) 0 360)))
 
@@ -133,6 +143,9 @@
 (defn degrees->radians [degrees]
   (-> degrees (/ 360) (* TAU)))
 
+(defn radians->degrees [radians]
+  (-> radians (* 360) (/ TAU)))
+
 (defn hit-detected-g
   ([[x1 y1] [x2 y2] distance]
    (hit-detected-g x1 y1 x2 y2 distance))
@@ -152,11 +165,12 @@
         angle (Math/atan2 y-diff x-diff)
         distance (Math/sqrt (+ (* x-diff x-diff)
                                (* y-diff y-diff)))]
-    [angle (/ distance 10)]))
+    [angle distance]))
 
 (defn calculate-gravity [mp size p]
   (let [[angle distance] (angle-and-distance p mp)
-        force (/ size (* distance distance))
+        distance' (/ distance 10)
+        force (/ size (* distance' distance'))
         force-x (* force (Math/cos angle))
         force-y (* force (Math/sin angle))]
     [force-x force-y]))
@@ -213,12 +227,31 @@
        (reverse)))
 
 (def weapons
-  [{:id    :big-gun
+  [{:id    :pass
+    :label "Pass"
+    :cost  0
+    :color (Color. (Integer/decode "#FFFFFF"))}
+   {:id    :big-gun
     :label "The Big One"
+    :cost  100
     :color (Color. (Integer/decode "#FF0000"))}
+   {:id    :cheap-gun
+    :label "The Cheap One"
+    :cost  20
+    :color (Color. (Integer/decode "#00FF0C"))}
    {:id    :shot-gun
     :label "Shotgun"
-    :color (Color. (Integer/decode "#1100FF"))}])
+    :cost  60
+    :color (Color. (Integer/decode "#1100FF"))}
+   {:id    :guided-shot
+    :label "Guided Missile"
+    :cost  80
+    :color (Color. (Integer/decode "#FFEA00"))}])
+
+(defn health->color [health]
+  (if (< 50 health)
+    (rgb-lerp Color/YELLOW Color/GREEN (/ (- health 50) 50))
+    (rgb-lerp Color/RED Color/YELLOW (/ health 50))))
 
 (defn initialize-players [players game-width game-height]
   (->> players
@@ -226,6 +259,7 @@
        (mapv #(assoc % :size player-radius
                        :score 0
                        :health 100
+                       :cash 30
                        :current-weapon 0))
        (reduce
          (fn [output-players input-player]
@@ -239,23 +273,14 @@
              colors)))
 
 (defn get-current-player [{:keys [players current-player] :as state}]
-  (when (nil? current-player)
-    (println state))
   (get players current-player))
 
 (defn get-current-weapon [state]
-  (when (nil? (:current-weapon (get-current-player state)))
-    (println (:current-weapon (get-current-player state)))
-    (println (get-current-player state))
-    (println (:current-player state))
-    (println (:players state))
-    )
   (nth weapons (:current-weapon (get-current-player state))))
 
 (defn await-entry [{:keys [current-player players width height] :as state}]
   (if-let [key-code (async/<!! key-chan)]
     (do
-      (println key-code)
       (case key-code
         38 (assoc state :current-player (mod (dec current-player) (count players)))
         40 (assoc state :current-player (mod (inc current-player) (count players)))
@@ -349,17 +374,13 @@
                   (+ (second p) (* pf (Math/cos (degrees->radians angle)) -1))
                   (Color. 255 (int (+ 95 (* power 2))) 0)))
 
-          (.setStroke g (BasicStroke. 3))
+          (.setStroke g (BasicStroke. 5))
           (outlined-circle p player-radius color)
+          (.setStroke g (BasicStroke. 2))
+          (lined-circle p player-radius (health->color health))
 
           (when aiming?
-            (.setColor g Color/BLACK)
-            (.setFont g (Font. Font/SANS_SERIF Font/BOLD 24))
-            (let [bounds (-> g .getFontMetrics (.getStringBounds (str power) g))
-                  [x y] p]
-              (.drawString g (str power)
-                           (int (- x (.getCenterX bounds)))
-                           (int (inc (- y (.getCenterY bounds))))))))))))
+            (text (map + p [0 1.5]) (str power) Color/BLACK 23)))))))
 
 (defn render-black-holes [{:keys [black-holes]}]
   (doseq [{:keys [p size]} black-holes]
@@ -368,11 +389,12 @@
                                Color/BLACK
                                Color/WHITE)))))
 
-(defn render-info-bar [{:keys [players width height info-height] :as state}]
+(defn render-info-bar [{:keys [current-player players width height info-height] :as state}]
   (.setFont g (Font. Font/SANS_SERIF Font/BOLD 24))
   (let [weapon-section 500
         player-width (/ (- width weapon-section) (count players))
-        weapon (get-current-weapon state)]
+        weapon (get-current-weapon state)
+        player (get-current-player state)]
     (.setColor g Color/DARK_GRAY)
     (.fillRect g 0 height width info-height)
     (.setColor g Color/BLACK)
@@ -380,18 +402,21 @@
     (.setColor g Color/WHITE)
     (text [(- width (* weapon-section 1/2))
            (int (+ height (* info-height 1/2)))]
-          (str "n / p : " (:label weapon))
-          Color/WHITE 40)
+          (str "$" (:cost weapon) " : " (:label weapon))
+          (if (< (:cash player) (:cost weapon))
+            Color/RED
+            Color/WHITE)
+          40)
 
-    (doseq [[idx {:keys [score color label health]}] (reverse (map-indexed vector players))]
+    (.setFont g (Font. Font/SANS_SERIF Font/BOLD 30))
+    (doseq [[idx {:keys [score color label cash health]}] (reverse (map-indexed vector players))]
       (let [corner-diameter 40
             h-inset 15
             xc (* player-width (+ idx 1/2))
             yc (+ height (/ info-height 2))
-            text (str label " (" (int health) ") : " score) ; todo: render health properly! maybe on the player as well?
-            [width center-x center-y] (-> g .getFontMetrics (.getStringBounds text g)
-                                          (destr .getWidth .getCenterX .getCenterY))
-            label-width (+ width h-inset h-inset)
+            message (str label ": $" (int cash) " / " score "pts.") ; todo: render health properly! maybe on the player as well?
+            raw-label-width (-> g .getFontMetrics (.getStringBounds message g) .getWidth)
+            label-width (+ raw-label-width h-inset h-inset)
             label-height info-height
             left (- xc (/ label-width 2))
             top (- yc (/ label-height 2))]
@@ -400,9 +425,13 @@
         (.setStroke g (BasicStroke. 1))
         (.setColor g Color/BLACK)
         (.drawRoundRect g (- left player-width) top (+ label-width player-width) label-height corner-diameter corner-diameter)
-        (.drawString g text
-                     (int (- xc center-x))
-                     (int (- yc center-y))))))
+        (.setColor g Color/DARK_GRAY)
+        (.fillRect g (- xc (/ raw-label-width 2)) (+ yc 5) raw-label-width 10)
+        (.setColor g (health->color health))
+        (.fillRect g (- xc (/ raw-label-width 2)) (+ yc 5) (* raw-label-width (/ health 100)) 10)
+        (.setColor g Color/BLACK)
+        (.drawRect g (- xc (/ raw-label-width 2)) (+ yc 5) raw-label-width 10)
+        (text [xc (- yc 5)] message (if (= current-player idx) Color/WHITE Color/BLACK) 30))))
   state)
 
 (defn await-command [{:keys [players current-player] :as state}]
@@ -425,7 +454,14 @@
           40 (update-in state [:players current-player :power] decrease-power)
           44 (update-in state [:players current-player :current-weapon] (fn [x] (mod (inc x) (count weapons))))
           46 (update-in state [:players current-player :current-weapon] (fn [x] (mod (dec x) (count weapons))))
-          10 (assoc state :current-phase :firing)
+          10 (let [cash (:cash (get-current-player state))
+                   cost (:cost (get-current-weapon state))
+                   cash' (- cash cost)]
+               (if (neg? cash')
+                 state
+                 (-> state
+                     (assoc :current-phase :firing)
+                     (assoc-in [:players current-player :cash] cash'))))
           81 (assoc state :current-phase :exit!)
           (do (println key-code)
               state))
@@ -502,6 +538,12 @@
 (defmulti weapon-firing (comp :id get-current-weapon))
 (defmulti weapon-projecting (comp :id get-current-weapon))
 
+(defmethod weapon-firing :pass [{:keys [players current-player] :as state}]
+  (-> state
+      (update-in [:players current-player :cash] + 30)
+      (assoc :current-phase :progressing
+             :current-player (mod (inc current-player) (count players)))))
+
 (defmethod weapon-firing :shot-gun [{:keys [bg-color] :as state}]
   (let [{:keys [angle power color p]} (get-current-player state)
         weapon (get-current-weapon state)
@@ -540,6 +582,28 @@
           (assoc projectile :p p' :dp dp' :fuse fuse')
           (assoc projectile :fuse 0
                             :effects (expire-effects p')))))))
+
+(defn thrust [{:keys [dp] :as projectile}]
+  ;(Thread/sleep 1000)
+  (let [[current-angle distance] (angle-and-distance dp [0 0]) ;(Math/atan2 (second dp) (first dp))
+        current-key
+        #_
+        (async/<!! key-chan)
+                (async/poll! key-chan)
+        power 1
+        ]
+    (case current-key
+      39 (let [new-angle (+ current-angle (* TAU 1/40))]
+           (println "left?" (radians->degrees current-angle) (radians->degrees new-angle))
+           (println (:dp projectile) [(int (* 100 power (Math/cos new-angle)))
+                                      (int (* 100 power (Math/sin new-angle)))])
+           (assoc projectile :dp [(* distance (Math/cos new-angle))
+                                    (* distance (Math/sin new-angle))]))
+      37 (let [new-angle (- current-angle (* TAU 1/40))]
+           (println "right?" (radians->degrees current-angle) (radians->degrees new-angle))
+           (assoc projectile :dp [(* distance (Math/cos new-angle))
+                                    (* distance (Math/sin new-angle))]))
+      projectile)))
 
 (defn trail [{:keys [p trail-ps trail-config fuse] :as projectile}]
   (assoc projectile :trail-ps (take (count trail-config) (conj trail-ps (if (zero? fuse) nil p)))))
@@ -638,7 +702,7 @@
                                 :dp             (projectile-starting-speed power angle)
                                 :trail-config   (map (fn [p]
                                                        {:color (rgb-lerp color Color/DARK_GRAY p)
-                                                        :width (- (* 2 bullet-size) (* p (dec (* 2 bullet-size))))})
+                                                        :width (- 8 (* p 7))})
                                                      (range 0 1.0001 1/25))
                                 :trail-ps       []
                                 :expire-effects (fn [p]
@@ -649,10 +713,73 @@
                                 (new-boom (projectile-starting-point p angle) 0 0 50)]
                    :limit      20}))) ; need a limit?
 
-(defmethod weapon-projecting :big-gun [{:keys [projection black-holes bg-color width height players] :as state}]
+(defmethod weapon-projecting :big-gun [{:keys [projection black-holes bg-color players] :as state}]
   (let [{:keys [projectile effects limit]} projection
         projectile' (-> projectile
                         ((fall black-holes))
+                        (trail)
+                        ((hit players))
+                        ((defuse state)))
+        effects' (concat effects (:effects projectile'))
+        done? (-> projectile' :fuse zero?)
+        limit' (if (and done? (empty? effects)) (dec limit) 20)]
+
+    (.setColor g bg-color)
+    (.fillRect g 0 0 (:width state) (+ (:height state) (:info-height state)))
+
+    (render-players state)
+    (render-black-holes state)
+
+    (let [{:keys [p size color fuse trail-ps trail-config]} projectile']
+      (doseq [[{:keys [width color]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail-ps))]
+        (when (and x1 x2)
+          (.setStroke g (BasicStroke. width))
+          (line x1 y1 x2 y2 color)))
+      (when-not (zero? fuse)
+        (circle p size color)))
+
+    (when (on-screen? state projectile')
+      (Thread/sleep 10))
+
+    (if (pos? limit')
+      (let [players' (damage-players players [projectile'])
+            player-effects (keepcat :effects players')
+            players'' (mapv #(dissoc % :effects) players')]
+        (-> state
+            (assoc :players players'')
+            (assoc :projection {:projectile projectile'
+                                :effects    (process-effects (concat effects' player-effects))
+                                :limit      limit'})))
+      (assoc state :current-phase :progressing))))
+
+(defmethod weapon-firing :guided-shot [state]
+  (let [{:keys [angle power color p]} (get-current-player state)
+        weapon (get-current-weapon state)]
+    (assoc state
+      :current-phase :projecting
+      :projection {:projectile {:color          (:color weapon)
+                                :size           7
+                                :damage         60
+                                :fuse           10000
+                                :p              (projectile-starting-point p angle)
+                                :dp             (projectile-starting-speed power angle)
+                                :trail-config   (map (fn [p]
+                                                       {:color (rgb-lerp color Color/DARK_GRAY p)
+                                                        :width 1})
+                                                     (range 0 1.0001 1/20))
+                                :trail-ps       []
+                                :expire-effects (fn [p]
+                                                  [(new-sparkle p 30)])
+                                :hit-effects    (fn [p]
+                                                  (repeatedly 5 #(new-sparkle p 20 40)))}
+                   :effects    [(new-sparkle (projectile-starting-point p angle) 15)]
+                   :limit      20})))
+
+(defmethod weapon-projecting :guided-shot [{:keys [projection black-holes bg-color players] :as state}]
+  (let [{:keys [projectile effects limit]} projection
+        projectile' (-> projectile
+                        ((fall black-holes))
+                        (thrust)
                         (trail)
                         ((hit players))
                         ((defuse state)))
@@ -724,8 +851,8 @@
   (-> state
       (update :black-holes process-black-holes)
       (remove-deceased-players)
-      (update :current-player inc)
-      (update :current-player mod (count (:players state)))
+      ;(update :current-player inc)
+      ;(update :current-player mod (count (:players state)))
       (assoc :current-phase :aiming)))
 
 (defn x []
@@ -746,6 +873,8 @@
 ; different shot types
 ; * parachute shot - slows down
 ; * guided shot, you can steer it a bit as it goes
+; * timed shot, you set the fuse
+; * proximity shot, blows up when it starts getting further away from an enemy
 ; * braking shot, you can control the braking as it goes
 ; * cluster burst shot
 ; * spread shot - DONE
