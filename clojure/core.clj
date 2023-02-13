@@ -17,9 +17,6 @@
   (concat (take n coll)
           (drop (inc n) coll)))
 
-(defn keepcat [f coll]
-  (apply concat (keep f coll)))
-
 (def width 2200)
 (def height 1400)
 (def bullet-size 4)
@@ -145,6 +142,11 @@
 
 (defn radians->degrees [radians]
   (-> radians (* 360) (/ TAU)))
+
+(defn distance [[x1 y1] [x2 y2]]
+  (let [a (- x1 x2)
+        b (- y1 y2)]
+    (Math/sqrt (+ (* a a) (* b b)))))
 
 (defn hit-detected-g
   ([[x1 y1] [x2 y2] distance]
@@ -521,6 +523,23 @@
                                   :color (rgba-lerp color (set-alpha color 0) (/ s size))})
                                (range size)))}))
 
+(defn new-shockwave [p size]
+  (let [color (Color. (Integer/decode "#42efff"))]
+    {:effect-type :shockwave
+     :p           p
+     :lifecycle   (map (fn [s]
+                         {:size  s
+                          :line (rgba-lerp color (set-alpha color 0) (Math/pow (/ s size) 4))
+                          :fill (rgba-lerp color (set-alpha color 0) (/ s size))})
+                       (range 0 size 7))}))
+
+(defmethod process-effect :shockwave [{:keys [p lifecycle] :as shockwave}]
+  (when (seq lifecycle)
+    (let [{:keys [size line fill]} (first lifecycle)]
+      (circle p size fill)
+      (lined-circle p size line))
+    (update shockwave :lifecycle rest)))
+
 (defmethod process-effect :sparkle [{:keys [p size] :as sparkle}]
   (circle p size Color/WHITE)
   (when (pos? size)
@@ -584,25 +603,27 @@
                             :effects (expire-effects p')))))))
 
 (defn thrust [{:keys [dp] :as projectile}]
-  ;(Thread/sleep 1000)
-  (let [[current-angle distance] (angle-and-distance dp [0 0]) ;(Math/atan2 (second dp) (first dp))
-        current-key
-        #_
-        (async/<!! key-chan)
-                (async/poll! key-chan)
-        power 1
-        ]
+  (let [[current-angle distance] (angle-and-distance dp [0 0])
+        current-key (async/poll! key-chan)]
     (case current-key
       39 (let [new-angle (+ current-angle (* TAU 1/40))]
-           (println "left?" (radians->degrees current-angle) (radians->degrees new-angle))
-           (println (:dp projectile) [(int (* 100 power (Math/cos new-angle)))
-                                      (int (* 100 power (Math/sin new-angle)))])
            (assoc projectile :dp [(* distance (Math/cos new-angle))
-                                    (* distance (Math/sin new-angle))]))
+                                  (* distance (Math/sin new-angle))]))
       37 (let [new-angle (- current-angle (* TAU 1/40))]
-           (println "right?" (radians->degrees current-angle) (radians->degrees new-angle))
            (assoc projectile :dp [(* distance (Math/cos new-angle))
-                                    (* distance (Math/sin new-angle))]))
+                                  (* distance (Math/sin new-angle))]))
+      projectile)))
+
+(defn detonate [players]
+  (fn [{:keys [p hit-effects damage] :as projectile}]
+    (if (= 10 (async/poll! key-chan))
+      (assoc projectile :fuse 0
+                        :effects (hit-effects p)
+                        :player-damages (keep-indexed (fn [idx {:keys [size] :as player}]
+                                                        (let [d (- damage (- (distance p (:p player)) size))]
+                                                          (when (pos? d)
+                                                            [idx d])))
+                                                      players))
       projectile)))
 
 (defn trail [{:keys [p trail-ps trail-config fuse] :as projectile}]
@@ -611,14 +632,14 @@
 (defn hit [players]
   (fn [{:keys [hit-player? p damage hit-effects] :as projectile}]
     (if hit-player?
-      (dissoc projectile :player-damage)
+      (dissoc projectile :player-damages)
       (if-let [hit-player (first
                             (keep-indexed (fn [idx player]
                                             (when (hit-detected-g (:p player) (:p projectile)
                                                                   (+ (:size player) (:size projectile)))
                                               idx))
                                           players))]
-        (assoc projectile :player-damage [hit-player damage]
+        (assoc projectile :player-damages [[hit-player damage]]
                           :hit-player? true
                           :fuse 0
                           :effects (hit-effects p))
@@ -631,11 +652,11 @@
       (assoc projectile :fuse 0))))
 
 (defn on-screen? [{:keys [width height]} {:keys [p size trail-ps]}]
-  (and (< size (first p) (- width size))
-       (< size (second p) (- height size))
+  (and (< (- size) (first p) (+ width size))
+       (< (- size) (second p) (+ height size))
        (if-let [last-trail-p (last trail-ps)]
-         (and (< size (first last-trail-p) (- width size))
-              (< size (second last-trail-p) (- height size)))
+         (and (< (- size) (first last-trail-p) (+ width size))
+              (< (- size) (second last-trail-p) (+ height size)))
          true)))
 
 (defn damage-players [players projectiles]
@@ -648,7 +669,7 @@
                       :effects effects
                       )))
           players
-          (keep :player-damage projectiles)))
+          (mapcat :player-damages projectiles)))
 
 (defmethod weapon-projecting :shot-gun [{:keys [projection black-holes bg-color players] :as state}]
   (let [{:keys [projectiles limit effects]} projection
@@ -657,7 +678,7 @@
                                 trail
                                 (fall black-holes))
                           projectiles)
-        effects (concat effects (keepcat :effects projectiles'))
+        effects (concat effects (mapcat :effects projectiles'))
         all-done? (every? #(-> % :fuse zero?) projectiles')
         limit' (if (and all-done? (empty? effects)) (dec limit) 20)]
 
@@ -680,7 +701,7 @@
 
     (if (pos? limit')
       (let [players' (damage-players players projectiles')
-            player-effects (keepcat :effects players')
+            player-effects (mapcat :effects players')
             players'' (mapv #(dissoc % :effects) players')]
         (-> state
             (assoc :players players'')
@@ -708,10 +729,11 @@
                                 :expire-effects (fn [p]
                                                   [(new-sparkle p 20)])
                                 :hit-effects    (fn [p]
-                                                  (repeatedly 5 #(new-sparkle p 20 50)))}
+                                                  (cons
+                                                    (new-shockwave p 120)
+                                                    (repeatedly 5 #(new-sparkle p 20 50))))}
                    :effects    [(new-sparkle (projectile-starting-point p angle) 35)
-                                (new-boom (projectile-starting-point p angle) 0 0 50)]
-                   :limit      20}))) ; need a limit?
+                                (new-boom (projectile-starting-point p angle) 0 0 50)]})))
 
 (defmethod weapon-projecting :big-gun [{:keys [projection black-holes bg-color players] :as state}]
   (let [{:keys [projectile effects limit]} projection
@@ -719,10 +741,11 @@
                         ((fall black-holes))
                         (trail)
                         ((hit players))
-                        ((defuse state)))
+                        ((defuse state))
+                        ((detonate players)))
         effects' (concat effects (:effects projectile'))
         done? (-> projectile' :fuse zero?)
-        limit' (if (and done? (empty? effects)) (dec limit) 20)]
+        limit' (if (and done? (empty? effects)) (dec (or limit 20)) 20)]
 
     (.setColor g bg-color)
     (.fillRect g 0 0 (:width state) (+ (:height state) (:info-height state)))
@@ -743,7 +766,68 @@
 
     (if (pos? limit')
       (let [players' (damage-players players [projectile'])
-            player-effects (keepcat :effects players')
+            player-effects (mapcat :effects players')
+            players'' (mapv #(dissoc % :effects) players')]
+        (-> state
+            (assoc :players players'')
+            (assoc :projection {:projectile projectile'
+                                :effects    (process-effects (concat effects' player-effects))
+                                :limit      limit'})))
+      (assoc state :current-phase :progressing))))
+
+(defmethod weapon-firing :cheap-gun [state]
+  (let [{:keys [angle power color p]} (get-current-player state)
+        weapon (get-current-weapon state)]
+    (assoc state
+      :current-phase :projecting
+      :projection {:projectile {:color          (:color weapon)
+                                :size           3
+                                :damage         40
+                                :fuse           1000
+                                :p              (projectile-starting-point p angle)
+                                :dp             (projectile-starting-speed power angle)
+                                :trail-config   (map (fn [p]
+                                                       {:color (rgb-lerp color Color/DARK_GRAY p)
+                                                        :width (- 4 (* p 3))})
+                                                     (range 0 1.0001 1/15))
+                                :trail-ps       []
+                                :expire-effects (fn [p]
+                                                  [(new-sparkle p 15)])
+                                :hit-effects    (fn [p]
+                                                  (repeatedly 5 #(new-sparkle p 20 25)))}
+                   :effects    [(new-sparkle (projectile-starting-point p angle) 25)]})))
+
+(defmethod weapon-projecting :cheap-gun [{:keys [projection black-holes bg-color players] :as state}]
+  (let [{:keys [projectile effects limit]} projection
+        projectile' (-> projectile
+                        ((fall black-holes))
+                        (trail)
+                        ((hit players))
+                        ((defuse state)))
+        effects' (concat effects (:effects projectile'))
+        done? (-> projectile' :fuse zero?)
+        limit' (if (and done? (empty? effects)) (dec (or limit 20)) 20)]
+
+    (.setColor g bg-color)
+    (.fillRect g 0 0 (:width state) (+ (:height state) (:info-height state)))
+
+    (render-players state)
+    (render-black-holes state)
+
+    (let [{:keys [p size color fuse trail-ps trail-config]} projectile']
+      (doseq [[{:keys [width color]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail-ps))]
+        (when (and x1 x2)
+          (.setStroke g (BasicStroke. width))
+          (line x1 y1 x2 y2 color)))
+      (when-not (zero? fuse)
+        (circle p size color)))
+
+    (when (on-screen? state projectile')
+      (Thread/sleep 10))
+
+    (if (pos? limit')
+      (let [players' (damage-players players [projectile'])
+            player-effects (mapcat :effects players')
             players'' (mapv #(dissoc % :effects) players')]
         (-> state
             (assoc :players players'')
@@ -806,7 +890,7 @@
 
     (if (pos? limit')
       (let [players' (damage-players players [projectile'])
-            player-effects (keepcat :effects players')
+            player-effects (mapcat :effects players')
             players'' (mapv #(dissoc % :effects) players')]
         (-> state
             (assoc :players players'')
