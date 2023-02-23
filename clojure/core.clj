@@ -1095,10 +1095,13 @@
 ; button to pass
 ; better fit info on the info bar when there are many players
 
+; make it exit properly if you run it at the command line
+
 (defn play!
   "Start the game loop in a future - this prevents the REPL being blocked and allows hot-loading changes into the
   running game."
-  []
+  [& _]
+  (println _)
   (future
     (try
       (game-loop)
