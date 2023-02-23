@@ -21,11 +21,14 @@
                           ^Color background-colour
                           ^Long fps
                           ^Boolean only-draw-when-updated?
-                          key-handler-fn]
+                          key-pressed-fn
+                          key-released-fn]
                    :or   {title                   "See!"
                           background-colour       (Color. 0 0 0 0)
                           fps                     25
-                          only-draw-when-updated? false}}]
+                          only-draw-when-updated? false
+                          key-pressed-fn          (constantly nil)
+                          key-released-fn         (constantly nil)}}]
   (let [width (.getWidth image nil)
         height (.getHeight image nil)
         buffer (BufferedImage. width height BufferedImage/TYPE_INT_ARGB)
@@ -40,10 +43,11 @@
                             (.drawImage graphics buffer (.left insets) (.top insets) this))))
         changed? (volatile! true)
         executor (Executors/newSingleThreadScheduledExecutor)]
-    (when key-handler-fn
-      (.addKeyListener frame (proxy [KeyAdapter] []
-                               (keyPressed [^KeyEvent ke]
-                                 (key-handler-fn (.getKeyCode ke))))))
+    (.addKeyListener frame (proxy [KeyAdapter] []
+                             (keyPressed [^KeyEvent ke]
+                               (key-pressed-fn (.getKeyCode ke)))
+                             (keyReleased [^KeyEvent ke]
+                               (key-released-fn (.getKeyCode ke)))))
     (.scheduleAtFixedRate executor
                           #(do
                              ;(println @changed? (not only-draw-when-updated?))

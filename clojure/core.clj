@@ -1,25 +1,30 @@
 (ns core
-  (:require [see :as see]
-            [clojure.core.async :as async]
-            [clojure.string :as string])
+  (:require
+    [clojure.java.io :as io]
+    [see :as see]
+    [clojure.core.async :as async]
+    [clojure.pprint :as pprint]
+    [clojure.string :as string])
   (:import [java.awt.image BufferedImage]
            [java.awt Graphics2D Color BasicStroke Font RenderingHints]))
 
 
 (def TAU (* Math/PI 2))
 
-(defmacro destr [java-object & accessors]
+(defmacro destr
+  "Create a descructurable collection of the results of calling the given accessors on the given Java object."
+  [java-object & accessors]
   (let [fields (map (fn [accessor]
                       (list accessor java-object)) accessors)]
     `[~@fields]))
 
-(defn but-nth [n coll]
+(defn but-nth "Returns the collection without the nth element."
+  [n coll]
   (concat (take n coll)
           (drop (inc n) coll)))
 
 (def width 2200)
 (def height 1400)
-(def bullet-size 4)
 
 (defn increase-power [power]
   (min (inc power) 80))
@@ -35,57 +40,71 @@
 
 (defonce key-chan (async/chan (async/dropping-buffer 10)))
 
-(defn key-handler-fn [key-code]
+(def !held-keys (volatile! #{}))
+(defn is-held? [key-code]
+  (@!held-keys key-code))
+
+(defn key-pressed-fn [key-code]
+  (vswap! !held-keys conj key-code)
   (async/>!! key-chan key-code))
 
+(defn key-released-fn [key-code]
+  (vswap! !held-keys disj key-code))
+
 (defonce image (BufferedImage. width height BufferedImage/TYPE_INT_ARGB))
-(defonce q (see/see image :key-handler-fn key-handler-fn))
+(defonce re-render (see/see image
+                            :key-pressed-fn key-pressed-fn
+                            :key-released-fn key-released-fn))
 (defonce g ^Graphics2D (.getGraphics image))
 
 (.setRenderingHint g RenderingHints/KEY_ANTIALIASING RenderingHints/VALUE_ANTIALIAS_ON)
 (.setRenderingHint g RenderingHints/KEY_RENDERING RenderingHints/VALUE_RENDER_QUALITY)
 
 
-(defn rgb
-  ([r g b]
-   (rgb r g b 255))
-  ([r g b a]
-   (Color. (int (min 255 (max 0 r)))
-           (int (min 255 (max 0 g)))
-           (int (min 255 (max 0 b)))
-           (int (min 255 (max 0 a))))))
+(defn rgb "Create a java.awt.Color object from the given red, green, blue and (optionally) alpha values (0-255)."
+  ([red green blue]
+   (rgb red green blue 255))
+  ([red green blue alpha]
+   (Color. (int (min 255 (max 0 red)))
+           (int (min 255 (max 0 green)))
+           (int (min 255 (max 0 blue)))
+           (int (min 255 (max 0 alpha))))))
 
-(defn rgba-lerp [c1 c2 p]
-  (let [r1 (.getRed c1)
-        g1 (.getGreen c1)
-        b1 (.getBlue c1)
-        a1 (.getAlpha c1)
-        r2 (.getRed c2)
-        g2 (.getGreen c2)
-        b2 (.getBlue c2)
-        a2 (.getAlpha c2)
-        ip (- 1 p)]
-    (rgb (+ (* ip r1) (* p r2))
-         (+ (* ip g1) (* p g2))
-         (+ (* ip b1) (* p b2))
-         (+ (* ip a1) (* p a2)))))
+(defn rgba-lerp
+  "Interpolate a new Color that is a proportion of the way from color-1 to color-2."
+  [color-1 color-2 proportion]
+  (let [r1 (.getRed color-1)
+        g1 (.getGreen color-1)
+        b1 (.getBlue color-1)
+        a1 (.getAlpha color-1)
+        r2 (.getRed color-2)
+        g2 (.getGreen color-2)
+        b2 (.getBlue color-2)
+        a2 (.getAlpha color-2)
+        ip (- 1 proportion)]
+    (rgb (+ (* ip r1) (* proportion r2))
+         (+ (* ip g1) (* proportion g2))
+         (+ (* ip b1) (* proportion b2))
+         (+ (* ip a1) (* proportion a2)))))
 
-(defn rgb-lerp [c1 c2 p]
-  (let [r1 (.getRed c1)
-        g1 (.getGreen c1)
-        b1 (.getBlue c1)
-        r2 (.getRed c2)
-        g2 (.getGreen c2)
-        b2 (.getBlue c2)
-        ip (- 1 p)]
-    (rgb (+ (* ip r1) (* p r2))
-         (+ (* ip g1) (* p g2))
-         (+ (* ip b1) (* p b2)))))
+(defn rgb-lerp
+  "Interpolate a new Color that is a proportion of the way from color-1 to color-2. Ignores alpha values."
+  [color-1 color-2 proportion]
+  (let [r1 (.getRed color-1)
+        g1 (.getGreen color-1)
+        b1 (.getBlue color-1)
+        r2 (.getRed color-2)
+        g2 (.getGreen color-2)
+        b2 (.getBlue color-2)
+        ip (- 1 proportion)]
+    (rgb (+ (* ip r1) (* proportion r2))
+         (+ (* ip g1) (* proportion g2))
+         (+ (* ip b1) (* proportion b2)))))
 
-(defn set-alpha [c1 a]
-  (rgb (.getRed c1) (.getGreen c1) (.getBlue c1) a))
+(defn set-alpha "Set the alpha value of a color." [color alpha-value]
+  (rgb (.getRed color) (.getGreen color) (.getBlue color) alpha-value))
 
-(defn circle
+(defn circle "Draw a solid circle of the given color and radius at the given location."
   ([[x y] radius color] (circle x y radius color))
   ([x y radius color]
    (.setColor g color)
@@ -96,18 +115,19 @@
              (int (* radius 2))
              0 360)))
 
-(defn lined-circle
-  ([[x y] radius color] (lined-circle x y radius color))
-  ([x y radius color]
+(defn lined-circle "Draw the outline of a circle of the given radius in the given color at the given location."
+  ([point radius color]
+   (lined-circle point radius color 1))
+  ([[x y] radius color proportion]
    (.setColor g color)
    (.drawArc g
              (int (- x radius))
              (int (- y radius))
              (int (inc (* radius 2)))
              (int (inc (* radius 2)))
-             0 360)))
+             (- 180 (* 180 proportion)) (+ 180 (* 180 proportion)))))
 
-(defn outlined-circle
+(defn outlined-circle "Draw a solid circle and outline it in black."
   ([[x y] radius color] (outlined-circle x y radius color))
   ([x y radius color]
    (.setColor g color)
@@ -123,14 +143,15 @@
              (int (inc (* radius 2)))
              (int (inc (* radius 2))) 0 360)))
 
-(defn line
+(defn line "draw a line between two point in the given color"
   ([[x1 y1] [x2 y2] color]
    (line x1 y1 x2 y2 color))
   ([x1 y1 x2 y2 colour]
    (.setColor g colour)
    (.drawLine g (int x1) (int y1) (int x2) (int y2))))
 
-(defn text [[xc yc] message color font-size]
+(defn text
+  [[xc yc] message color font-size]
   (.setColor g color)
   (.setFont g (Font. Font/SANS_SERIF Font/BOLD font-size))
   (let [[center-x center-y] (-> g .getFontMetrics (.getStringBounds message g)
@@ -148,20 +169,22 @@
         b (- y1 y2)]
     (Math/sqrt (+ (* a a) (* b b)))))
 
-(defn hit-detected-g
+(defn hit-detected? "Are two points within a certain distance of each other?"
   ([[x1 y1] [x2 y2] distance]
-   (hit-detected-g x1 y1 x2 y2 distance))
+   (hit-detected? x1 y1 x2 y2 distance))
   ([x1 y1 x2 y2 distance]
    (let [a (- x1 x2)
          b (- y1 y2)
          c (Math/sqrt (+ (* a a) (* b b)))]
      (< c distance))))
 
-(defn on-screen [[x y] width height margin]
+(defn on-screen "Is the given point within a rectangle smaller than the size by the margin."
+  [[x y] width height margin]
   (and (< margin x (- width margin))
        (< margin y (- height margin))))
 
-(defn angle-and-distance [[x1 y1] [x2 y2]]
+(defn angle-and-distance "return the angle and distance between two points"
+  [[x1 y1] [x2 y2]]
   (let [x-diff (- x1 x2)
         y-diff (- y1 y2)
         angle (Math/atan2 y-diff x-diff)
@@ -169,10 +192,12 @@
                                (* y-diff y-diff)))]
     [angle distance]))
 
-(defn calculate-gravity [mp size p]
-  (let [[angle distance] (angle-and-distance p mp)
+(defn calculate-gravity
+  "Returns a vector representing the attractive force between two bodies."
+  [position-of-mass size-of-mass position]
+  (let [[angle distance] (angle-and-distance position position-of-mass)
         distance' (/ distance 10)
-        force (/ size (* distance' distance'))
+        force (/ size-of-mass (* distance' distance'))
         force-x (* force (Math/cos angle))
         force-y (* force (Math/sin angle))]
     [force-x force-y]))
@@ -182,22 +207,25 @@
 (def gun-length 20)
 (def player-radius 20)
 
-(defn random-location [width height anti-targets]
-  (println 'random-location [width height] (mapv :p anti-targets))
-  (let [x (+ 50 (rand-int (- width 100)))
-        y (+ 50 (rand-int (- height 100)))]
-    (if (not-any? #(hit-detected-g x y
-                                   (first (:p %)) (second (:p %))
-                                   (+ (abs (:size %)) player-radius gun-length 10))
+(defn random-location
+  "Returns a new random location in the game-space that has enough space to fit a player in it."
+  [width height anti-targets]
+  (let [margin (+ player-radius gun-length 10)
+        x (+ margin (rand-int (- width margin margin)))
+        y (+ margin (rand-int (- height margin margin)))]
+    (if (not-any? #(hit-detected? x y
+                                  (first (:p %)) (second (:p %))
+                                  (+ (abs (:size %)) margin))
                   anti-targets)
-      (doto [x y] (println))
+      [x y]
       (recur width height anti-targets))))
 
-(defn new-black-hole [p]
+(defn new-singularity "Creates a new black or white hole."
+  [point]
   (let [[lifecycle color] (if (< 0.75 (rand))
                             [(range -25 -2 0.4) Color/WHITE]
                             [(range 25 2 -0.3) Color/BLACK])]
-    {:p         p
+    {:p         point
      :size      (first lifecycle)
      :lifecycle lifecycle
      :color     color}))
@@ -211,16 +239,19 @@
     {:width         game-width
      :height        game-height
      :info-height   info-height
-     :players       [{:label "Start game" :kind :start}
-                     {:label "Add a new player" :kind :add}
-                     {:label "You" :kind :human}
-                     {:label "Me" :kind :ai}]
-     :current-player 0
      :bg-color      Color/GRAY
-     :current-phase :setup}))
+     :current-phase :initializing}))
+
+(defmethod tick :initializing [state]
+  (assoc state :players [{:label "Start game" :kind :start}
+                           {:label "Add a new player" :kind :add}
+                           {:label "You" :kind :human}
+                           {:label "Me" :kind :ai}]
+               :current-player 0
+               :current-phase :menu))
 
 (def colors
-  (->> (for [h (range 0.0 2.9 0.3)]
+  (->> (for [h (range 0.0 2.9 0.4)]
          (Color/getHSBColor h 1.0 1.0))
        (map (fn [^Color c]
               (let [light (/ (+ (.getRed c) (.getGreen c) (.getBlue c))
@@ -231,8 +262,16 @@
 (def weapons
   [{:id    :pass
     :label "Pass"
-    :cost  0
+    :cost  -30
     :color (Color. (Integer/decode "#FFFFFF"))}
+   {:id    :invest
+    :label "Invest"
+    :cost  10
+    :color (Color. (Integer/decode "#77C1FF"))}
+   {:id    :heal
+    :label "Repair"
+    :cost  10
+    :color (Color. (Integer/decode "#26D900"))}
    {:id    :big-gun
     :label "The Big One"
     :cost  100
@@ -240,7 +279,7 @@
    {:id    :cheap-gun
     :label "The Cheap One"
     :cost  20
-    :color (Color. (Integer/decode "#00FF0C"))}
+    :color (Color. (Integer/decode "#FDA46D"))}
    {:id    :shot-gun
     :label "Shotgun"
     :cost  60
@@ -274,7 +313,7 @@
                              :power 50))
              colors)))
 
-(defn get-current-player [{:keys [players current-player] :as state}]
+(defn get-current-player [{:keys [players current-player]}]
   (get players current-player))
 
 (defn get-current-weapon [state]
@@ -282,41 +321,42 @@
 
 (defn await-entry [{:keys [current-player players width height] :as state}]
   (if-let [key-code (async/<!! key-chan)]
-    (do
-      (case key-code
-        38 (assoc state :current-player (mod (dec current-player) (count players)))
-        40 (assoc state :current-player (mod (inc current-player) (count players)))
-        8 (if (= :human (get-in state [:players current-player :kind]))
-            (update-in state [:players current-player :label] (fn [x] (subs x 0 (max 0 (dec (count x))))))
-            state)
-        10 (do
-             (println current-player ": " (get-in state [:players current-player]))
-             (case (get-in state [:players current-player :kind])
+    (case key-code
+      38 (assoc state :current-player (mod (dec current-player) (count players)))
+      40 (assoc state :current-player (mod (inc current-player) (count players)))
+      8 (if (= :human (get-in state [:players current-player :kind]))
+          (update-in state [:players current-player :label] (fn [x] (subs x 0 (max 0 (dec (count x))))))
+          state)
+      10 (do
+           (println current-player ": " (get-in state [:players current-player]))
+           (case (get-in state [:players current-player :kind])
              :human (assoc-in state [:players current-player :kind] :ai)
              :ai (assoc-in state [:players current-player :kind] :human)
-             :add (update state :players conj {:label "Also Me" :kind :ai})
+             :add (if (< (-> state :players count) 10)
+                    (update state :players conj {:label "Also Me" :kind :ai})
+                    state)
              :start (-> state
                         (update :players initialize-players width height)
-                        (assoc :black-holes [(new-black-hole [(* width 1/2) (* height 1/2)])]
+                        (assoc :black-holes [(new-singularity [(* width 1/2) (* height 1/2)])]
                                :current-phase :aiming))))
-        127 (if (#{:human :ai} (get-in state [:players current-player :kind]))
-              (-> state
-                  (update :players (comp vec (partial but-nth current-player)))
-                  (assoc :current-player 0))
-              state)
-        81 (assoc state :current-phase :exit!)
-        (if (or (<= 65 key-code 90)
-                (= key-code 32))
-          (if (= :human (get-in state [:players current-player :kind]))
-            (update-in state [:players current-player :label] (fn [x]
-                                                                (some-> (str x (char key-code)) string/capitalize)))
+      127 (if (#{:human :ai} (get-in state [:players current-player :kind]))
+            (-> state
+                (update :players (comp vec (partial but-nth current-player)))
+                (assoc :current-player 0))
             state)
-          (do
-            (println key-code)
-            state))))
+      81 (assoc state :current-phase :exit!)
+      (if (or (<= 65 key-code 90)
+              (= key-code 32))
+        (if (= :human (get-in state [:players current-player :kind]))
+          (update-in state [:players current-player :label] (fn [x]
+                                                              (some-> (str x (char key-code)) string/capitalize)))
+          state)
+        (do
+          (println key-code)
+          state)))
     (assoc state :current-phase :exit!)))
 
-(defmethod tick :setup [{:keys [players current-player width height info-height] :as state}]
+(defmethod tick :menu [{:keys [players current-player width height info-height] :as state}]
   (.setColor g Color/WHITE)
   (.fillRect g 0 0 width (+ height info-height))
   (.setFont g (Font. Font/SANS_SERIF Font/BOLD 40))
@@ -346,7 +386,7 @@
       (.drawString g text
                    (int (- xc center-x))
                    (int (- yc center-y (- label-h))))))
-  (q)
+  (re-render)
   (await-entry state))
 
 (defn render-players [{:keys [players current-player bg-color current-phase]}]
@@ -384,7 +424,7 @@
           (when aiming?
             (text (map + p [0 1.5]) (str power) Color/BLACK 23)))))))
 
-(defn render-black-holes [{:keys [black-holes]}]
+(defn render-singularities [{:keys [black-holes]}]
   (doseq [{:keys [p size]} black-holes]
     (let [[x y] p]
       (circle x y (abs size) (if (pos? size)
@@ -404,7 +444,9 @@
     (.setColor g Color/WHITE)
     (text [(- width (* weapon-section 1/2))
            (int (+ height (* info-height 1/2)))]
-          (str "$" (:cost weapon) " : " (:label weapon))
+          (str
+            (if (pos? (:cost weapon)) "-" "+")
+            "$" (Math/abs (:cost weapon)) " : " (:label weapon))
           (if (< (:cash player) (:cost weapon))
             Color/RED
             Color/WHITE)
@@ -416,7 +458,7 @@
             h-inset 15
             xc (* player-width (+ idx 1/2))
             yc (+ height (/ info-height 2))
-            message (str label ": $" (int cash) " / " score "pts.") ; todo: render health properly! maybe on the player as well?
+            message (str label ": $" (int cash) " / " score "pts.")
             raw-label-width (-> g .getFontMetrics (.getStringBounds message g) .getWidth)
             label-width (+ raw-label-width h-inset h-inset)
             label-height info-height
@@ -439,12 +481,23 @@
 (defn await-command [{:keys [players current-player] :as state}]
   (let [{:keys [kind p]} (nth players current-player)]
     (if (= kind :ai)
-      (let [target (rand-nth (but-nth current-player players))]
+      (let [target (rand-nth (but-nth current-player players))
+            weapon-idx (rand-nth (keep-indexed (fn [idx weapon]
+                                                 (when (string/ends-with? (str (:id weapon)) "gun") idx))
+                                               weapons))
+            cash (:cash (get-current-player state))
+            cost (:cost (nth weapons weapon-idx))
+            [weapon-idx' cash'] (if (< cash cost)
+                                  [0 (- cash (:cost (nth weapons 0)))]
+                                  [weapon-idx (- cash cost)])]
         (Thread/sleep 1000)
         (-> state
-            (assoc-in [:players current-player :angle] (-> (first (angle-and-distance p (:p target)))
-                                                           (/ TAU) (* 360) (- 90) (+ (rand-int 11) -5)))
-            (assoc-in [:players current-player :power] (+ 5 (rand-int 75)))
+            (update-in [:players current-player] merge
+                       {:current-weapon weapon-idx'
+                        :cash           cash'
+                        :power          (+ 5 (rand-int 75))
+                        :angle          (-> (first (angle-and-distance p (:p target)))
+                                            (/ TAU) (* 360) (- 90) (+ (rand-int 11) -5))})
             (assoc :current-phase :firing)))
       (if-let [key-code (async/<!! key-chan)]
         (case key-code
@@ -471,17 +524,10 @@
 
 (defmethod tick :aiming [state]
   (render-players state)
-  (render-black-holes state)
+  (render-singularities state)
   (render-info-bar state)
-  (q)
+  (re-render)
   (await-command state))
-
-(defn clear [{:keys [bg-color width height info-height]}]
-  (.setColor g bg-color)
-  (.fillRect g 0 0 width (+ height info-height))
-  (q))
-
-(def bullet-power-factor 0.2)
 
 (defn projectile-starting-point [p angle]
   (map +
@@ -489,19 +535,22 @@
        [(* (+ player-radius gun-length) (Math/sin (degrees->radians angle)))
         (* (+ player-radius gun-length) (Math/cos (degrees->radians angle)) -1)]))
 
+(def bullet-power-factor 0.2)
+
 (defn projectile-starting-speed [power angle]
   [(* power (Math/sin (degrees->radians angle)) bullet-power-factor)
    (* power (Math/cos (degrees->radians angle)) -1 bullet-power-factor)])
 
-(defn gravity-force [p other-points]
-  (reduce (fn [acc point]
-            (map - acc (calculate-gravity (:p point) (:size point) p)))
+(defn gravity-force [point other-masses]
+  (reduce (fn [acc mass]
+            (map - acc (calculate-gravity (:p mass) (:size mass) point)))
           [0 0]
-          other-points))
+          other-masses))
 
 (defmulti process-effect :effect-type)
 
 (defn new-sparkle
+  "A sudden white circle that rapidly shrinks."
   ([p size]
    {:effect-type :sparkle :p p :size size})
   ([p offset size]
@@ -510,7 +559,14 @@
          v [(* r (Math/sin angle)) (* r (Math/cos angle))]]
      (new-sparkle (map + p v) size))))
 
-(defn new-boom [p delay offset size]
+(defmethod process-effect :sparkle [{:keys [p size] :as sparkle}]
+  (circle p size Color/WHITE)
+  (when (pos? size)
+    (update sparkle :size - 5)))
+
+(defn new-boom
+  "A delayed random-explosion-colored circle that fades as it grows."
+  [p delay offset size]
   (let [angle (rand TAU)
         r (rand offset)
         v [(* r (Math/sin angle)) (* r (Math/cos angle))]
@@ -523,7 +579,15 @@
                                   :color (rgba-lerp color (set-alpha color 0) (/ s size))})
                                (range size)))}))
 
-(defn new-shockwave [p size]
+(defmethod process-effect :boom [{:keys [p lifecycle] :as sparkle}]
+  (when (seq lifecycle)
+    (let [{:keys [size color]} (first lifecycle)]
+      (circle p size color))
+    (update sparkle :lifecycle rest)))
+
+(defn new-shockwave
+  "A rapidly growing and fading circle with a darker outline."
+  [p size]
   (let [color (Color. (Integer/decode "#42efff"))]
     {:effect-type :shockwave
      :p           p
@@ -540,34 +604,43 @@
       (lined-circle p size line))
     (update shockwave :lifecycle rest)))
 
-(defmethod process-effect :sparkle [{:keys [p size] :as sparkle}]
-  (circle p size Color/WHITE)
-  (when (pos? size)
-    (update sparkle :size - 5)))
-
-(defmethod process-effect :boom [{:keys [p lifecycle] :as sparkle}]
-  (when (seq lifecycle)
-    (let [{:keys [size color]} (first lifecycle)]
-      (circle p size color))
-    (update sparkle :lifecycle rest)))
-
 (defn process-effects [effects]
   (doall (keep process-effect effects)))
 
 (defmulti weapon-firing (comp :id get-current-weapon))
 (defmulti weapon-projecting (comp :id get-current-weapon))
 
+(defn realize-returns [{:keys [cash investments] :as player}]
+  (-> player
+      (assoc :cash (apply + cash (map first investments)))
+      (update :investments (partial keep next))))
+
+(defn invest [player]
+  (-> player
+      (update :investments conj (repeat 20 1))))
+
+(defmethod weapon-firing :invest [{:keys [current-player] :as state}]
+  (-> state
+      (update-in [:players current-player] invest)
+      (assoc :current-phase :aiming)))
+
 (defmethod weapon-firing :pass [{:keys [players current-player] :as state}]
   (-> state
-      (update-in [:players current-player :cash] + 30)
+      (update-in [:players current-player] realize-returns)
       (assoc :current-phase :progressing
              :current-player (mod (inc current-player) (count players)))))
+
+(defmethod weapon-firing :heal [{:keys [current-player] :as state}]
+  (-> state
+      (update-in [:players current-player :health] (fn [health] (min 100 (+ health 15))))
+      (assoc :current-phase :aiming)))
 
 (defmethod weapon-firing :shot-gun [{:keys [bg-color] :as state}]
   (let [{:keys [angle power color p]} (get-current-player state)
         weapon (get-current-weapon state)
         spread-f 0.07
-        spread-fn (fn [x] (* x (+ (- 1 spread-f) (rand (* 2 spread-f)))))]
+        spread-fn (fn [x]
+                    (* x (+ (- 1 spread-f) (rand (* 2 spread-f)))))]
     (assoc state
       :current-phase :projecting
       :projection {:projectiles (repeatedly 10 (fn []
@@ -576,7 +649,8 @@
                                                   :damage         10
                                                   :fuse           (+ 500 (rand-int 10))
                                                   :p              (projectile-starting-point p angle)
-                                                  :dp             (map spread-fn (projectile-starting-speed power angle))
+                                                  :dp             (map spread-fn
+                                                                       (projectile-starting-speed power angle))
                                                   :trail-config   (map (fn [p]
                                                                          {:color (rgb-lerp color bg-color p)
                                                                           :width 1})
@@ -589,10 +663,16 @@
                    :effects     [(new-sparkle (projectile-starting-point p angle) 15)]
                    :limit       20})))
 
-(defn fall [masses]
+(defn clear-one-offs [projectile]
+  (dissoc projectile :effects :player-damages))
+
+(defn fall
+  "Returns a function that moves a projectile with its current momentum and accelerates it towards the given masses.
+  Also burns the fuse on the projectile."
+  [masses]
   (fn [{:keys [p dp fuse expire-effects] :as projectile}]
     (if (zero? fuse)
-      (dissoc projectile :effects)
+      projectile
       (let [ddp (gravity-force p masses)
             dp' (map + dp ddp)
             p' (map + p dp')
@@ -602,21 +682,27 @@
           (assoc projectile :fuse 0
                             :effects (expire-effects p')))))))
 
-(defn thrust [{:keys [dp] :as projectile}]
-  (let [[current-angle distance] (angle-and-distance dp [0 0])
-        current-key (async/poll! key-chan)]
-    (case current-key
-      39 (let [new-angle (+ current-angle (* TAU 1/40))]
-           (assoc projectile :dp [(* distance (Math/cos new-angle))
-                                  (* distance (Math/sin new-angle))]))
-      37 (let [new-angle (- current-angle (* TAU 1/40))]
-           (assoc projectile :dp [(* distance (Math/cos new-angle))
-                                  (* distance (Math/sin new-angle))]))
-      projectile)))
+(defn thrust
+  "Allows manual steering of guided projectiles with the left and right arrow keys."
+  [{:keys [dp] :as projectile}]
+  (let [effectiveness 1/100]
+    (cond
+      (is-held? 39) (let [[current-angle distance] (angle-and-distance dp [0 0])
+                          new-angle (+ current-angle (* TAU effectiveness))]
+                      (assoc projectile :dp [(* distance (Math/cos new-angle))
+                                             (* distance (Math/sin new-angle))]))
+      (is-held? 37) (let [[current-angle distance] (angle-and-distance dp [0 0])
+                          new-angle (- current-angle (* TAU effectiveness))]
+                      (assoc projectile :dp [(* distance (Math/cos new-angle))
+                                             (* distance (Math/sin new-angle))]))
+      :else projectile)))
 
-(defn detonate [players]
-  (fn [{:keys [p hit-effects damage] :as projectile}]
-    (if (= 10 (async/poll! key-chan))
+(defn detonate
+  "Allows for early detonation when the Enter key is pressed."
+  [players]
+  (fn [{:keys [p hit-effects damage fuse] :as projectile}]
+    (if (and (= 10 (async/poll! key-chan))
+             (pos? fuse))
       (assoc projectile :fuse 0
                         :effects (hit-effects p)
                         :player-damages (keep-indexed (fn [idx {:keys [size] :as player}]
@@ -626,17 +712,20 @@
                                                       players))
       projectile)))
 
-(defn trail [{:keys [p trail-ps trail-config fuse] :as projectile}]
+(defn trail "Step function for projectile trails."
+  [{:keys [p trail-ps trail-config fuse] :as projectile}]
   (assoc projectile :trail-ps (take (count trail-config) (conj trail-ps (if (zero? fuse) nil p)))))
 
-(defn hit [players]
+(defn hit
+  "Returns a function to process projectiles hitting players."
+  [players]
   (fn [{:keys [hit-player? p damage hit-effects] :as projectile}]
     (if hit-player?
-      (dissoc projectile :player-damages)
+      projectile
       (if-let [hit-player (first
                             (keep-indexed (fn [idx player]
-                                            (when (hit-detected-g (:p player) (:p projectile)
-                                                                  (+ (:size player) (:size projectile)))
+                                            (when (hit-detected? (:p player) (:p projectile)
+                                                                 (+ (:size player) (:size projectile)))
                                               idx))
                                           players))]
         (assoc projectile :player-damages [[hit-player damage]]
@@ -645,13 +734,17 @@
                           :effects (hit-effects p))
         projectile))))
 
-(defn defuse [{:keys [width height]}]
+(defn defuse
+  "Defuse a projectile if it leaves the game area and is unlikely to return."
+  [{:keys [width height]}]
   (fn [{:keys [p] :as projectile}]
-    (if (hit-detected-g p [(/ width 2) (/ height 2)] (max width height))
+    (if (hit-detected? p [(/ width 2) (/ height 2)] (max width height))
       projectile
       (assoc projectile :fuse 0))))
 
-(defn on-screen? [{:keys [width height]} {:keys [p size trail-ps]}]
+(defn on-screen?
+  "Is the projectile and its trail on screen?"
+  [{:keys [width height]} {:keys [p size trail-ps]}]
   (and (< (- size) (first p) (+ width size))
        (< (- size) (second p) (+ height size))
        (if-let [last-trail-p (last trail-ps)]
@@ -665,9 +758,9 @@
                   health' (- health damage)
                   effects (when-not (pos? health')
                             (map #(new-boom p % 20 100) (range 40)))]
-              (update players idx assoc :health health'
-                      :effects effects
-                      )))
+              (update players idx assoc
+                      :health health'
+                      :effects effects)))
           players
           (mapcat :player-damages projectiles)))
 
@@ -676,7 +769,8 @@
         projectiles' (map (comp (defuse state)
                                 (hit players)
                                 trail
-                                (fall black-holes))
+                                (fall black-holes)
+                                clear-one-offs)
                           projectiles)
         effects (concat effects (mapcat :effects projectiles'))
         all-done? (every? #(-> % :fuse zero?) projectiles')
@@ -686,7 +780,7 @@
     (.fillRect g 0 0 (:width state) (+ (:height state) (:info-height state)))
 
     (render-players state)
-    (render-black-holes state)
+    (render-singularities state)
 
     (doseq [{:keys [p size color fuse trail-ps trail-config]} projectiles']
       (doseq [[{:keys [width color]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail-ps))]
@@ -696,7 +790,7 @@
       (when-not (zero? fuse)
         (circle p size color)))
 
-    (when (every? (partial on-screen? state) projectiles')
+    (when (some (partial on-screen? state) projectiles')
       (Thread/sleep 10))
 
     (if (pos? limit')
@@ -738,6 +832,7 @@
 (defmethod weapon-projecting :big-gun [{:keys [projection black-holes bg-color players] :as state}]
   (let [{:keys [projectile effects limit]} projection
         projectile' (-> projectile
+                        (clear-one-offs)
                         ((fall black-holes))
                         (trail)
                         ((hit players))
@@ -751,7 +846,7 @@
     (.fillRect g 0 0 (:width state) (+ (:height state) (:info-height state)))
 
     (render-players state)
-    (render-black-holes state)
+    (render-singularities state)
 
     (let [{:keys [p size color fuse trail-ps trail-config]} projectile']
       (doseq [[{:keys [width color]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail-ps))]
@@ -800,6 +895,7 @@
 (defmethod weapon-projecting :cheap-gun [{:keys [projection black-holes bg-color players] :as state}]
   (let [{:keys [projectile effects limit]} projection
         projectile' (-> projectile
+                        (clear-one-offs)
                         ((fall black-holes))
                         (trail)
                         ((hit players))
@@ -812,7 +908,7 @@
     (.fillRect g 0 0 (:width state) (+ (:height state) (:info-height state)))
 
     (render-players state)
-    (render-black-holes state)
+    (render-singularities state)
 
     (let [{:keys [p size color fuse trail-ps trail-config]} projectile']
       (doseq [[{:keys [width color]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail-ps))]
@@ -862,6 +958,7 @@
 (defmethod weapon-projecting :guided-shot [{:keys [projection black-holes bg-color players] :as state}]
   (let [{:keys [projectile effects limit]} projection
         projectile' (-> projectile
+                        (clear-one-offs)
                         ((fall black-holes))
                         (thrust)
                         (trail)
@@ -875,7 +972,7 @@
     (.fillRect g 0 0 (:width state) (+ (:height state) (:info-height state)))
 
     (render-players state)
-    (render-black-holes state)
+    (render-singularities state)
 
     (let [{:keys [p size color fuse trail-ps trail-config]} projectile']
       (doseq [[{:keys [width color]} [[x1 y1] [x2 y2]]] (map vector trail-config (partition 2 1 trail-ps))]
@@ -905,7 +1002,7 @@
 (defmethod tick :projecting [state]
   (render-info-bar (weapon-projecting state)))
 
-(defn process-black-holes [black-holes]
+(defn process-singularities [black-holes]
   (for [{:keys [lifecycle] :as hole} black-holes
         :when (seq lifecycle)]
     (assoc hole :size (first lifecycle)
@@ -916,7 +1013,7 @@
     (fn [{:keys [black-holes players] :as state} deceased-index]
       (if (pos? (get-in players [deceased-index :health]))
         state
-        (let [black-holes' (conj black-holes (new-black-hole (get-in players [deceased-index :p])))
+        (let [black-holes' (conj black-holes (new-singularity (get-in players [deceased-index :p])))
               deceased (nth players deceased-index)
               reborn (assoc deceased :health 100
                                      :p (random-location width height
@@ -933,24 +1030,34 @@
 (defmethod tick :progressing [state]
   (while (async/poll! key-chan))
   (-> state
-      (update :black-holes process-black-holes)
+      (update :black-holes process-singularities)
       (remove-deceased-players)
-      ;(update :current-player inc)
-      ;(update :current-player mod (count (:players state)))
       (assoc :current-phase :aiming)))
 
-(defn x []
-  (let [state-0 (initial-state width height)]
-    (clear state-0)
-    (println (:current-phase state-0))
-    (loop [state state-0]
-      (let [state' (tick state)]
-        (when (not= (:current-phase state) (:current-phase state'))
-          (clear state')
-          (println (:current-phase state')))
-        (q)
-        (when-not (= :exit! (:current-phase state'))
-          (recur state'))))))
+(defn tick-safely [state]
+  (try
+    (tick state)
+    (catch Exception e
+      (println "tick FAILED:" (.getSimpleName (class e)) (ex-message e))
+      (spit (io/file "state-dump.edn")
+            (with-out-str
+              (pprint/pprint state)))
+      (throw e))))
+
+(defn clear-screen [{:keys [bg-color width height info-height]}] ; todo: use this elsewhere!
+  (.setColor g bg-color)
+  (.fillRect g 0 0 width (+ height info-height)))
+
+(defn game-loop []
+  (loop [state (initial-state width height)]
+    ; TODO: catch exceptions and log state!!!
+    (let [state' (tick-safely state)]
+      (when (not= (:current-phase state) (:current-phase state'))
+        (println "->" (name (:current-phase state')))
+        (clear-screen state'))
+      (re-render)
+      (when-not (= :exit! (:current-phase state'))
+        (recur state')))))
 
 
 ; TODO: ideas
@@ -968,11 +1075,19 @@
 ; destroyable barriers
 ; crates
 ; explosions way too big - ? maybe done
+; damage effect, print the amount of damage done above the player being damaged
 
-(defn play! []
+; highlight whose turn it is more!!!
+; button to pass
+; better fit info on the info bar when there are many players
+
+(defn play!
+  "Start the game loop in a future - this prevents the REPL being blocked and allows hot-loading changes into the
+  running game."
+  []
   (future
     (try
-      (x)
+      (game-loop)
       (catch Exception e
         (.printStackTrace e)))))
 
