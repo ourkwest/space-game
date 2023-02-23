@@ -151,12 +151,14 @@
    (.drawLine g (int x1) (int y1) (int x2) (int y2))))
 
 (defn text
-  [[xc yc] message color font-size]
-  (.setColor g color)
-  (.setFont g (Font. Font/SANS_SERIF Font/BOLD font-size))
-  (let [[center-x center-y] (-> g .getFontMetrics (.getStringBounds message g)
-                                (destr .getCenterX .getCenterY))]
-    (.drawString g message (int (- xc center-x)) (int (- yc center-y)))))
+  ([p message color font-size]
+   (text p message color font-size Font/BOLD))
+  ([[xc yc] message color font-size font-style]
+   (.setColor g color)
+   (.setFont g (Font. Font/SANS_SERIF font-style font-size))
+   (let [[center-x center-y] (-> g .getFontMetrics (.getStringBounds message g)
+                                 (destr .getCenterX .getCenterY))]
+     (.drawString g message (int (- xc center-x)) (int (- yc center-y))))))
 
 (defn degrees->radians [degrees]
   (-> degrees (/ 360) (* TAU)))
@@ -233,7 +235,7 @@
 (defmulti tick :current-phase)
 
 (defn initial-state [width height]
-  (let [info-height 50
+  (let [info-height 80
         game-width width
         game-height (- height info-height)]
     {:width         game-width
@@ -262,30 +264,37 @@
 (def weapons
   [{:id    :pass
     :label "Pass"
+    :description "Pass play to the next player. Gain $30."
     :cost  -30
     :color (Color. (Integer/decode "#FFFFFF"))}
    {:id    :invest
     :label "Invest"
+    :description "Invest $10 to receive $1 for each of the next 20 turns."
     :cost  10
     :color (Color. (Integer/decode "#77C1FF"))}
    {:id    :heal
     :label "Repair"
+    :description "Gain 10% health for $10."
     :cost  10
     :color (Color. (Integer/decode "#26D900"))}
    {:id    :big-gun
     :label "The Big One"
+    :description "Detonates on impact or when you press Enter [⏎]."
     :cost  100
     :color (Color. (Integer/decode "#FF0000"))}
    {:id    :cheap-gun
     :label "The Cheap One"
+    :description "Detonates on impact."
     :cost  20
     :color (Color. (Integer/decode "#FDA46D"))}
    {:id    :shot-gun
     :label "Shotgun"
+    :description "A spread of smaller fragments."
     :cost  60
     :color (Color. (Integer/decode "#1100FF"))}
    {:id    :guided-shot
     :label "Guided Missile"
+    :description "Can be steered with the arrow keys [◀ ▶]. Low power recommended!"
     :cost  80
     :color (Color. (Integer/decode "#FFEA00"))}])
 
@@ -436,14 +445,19 @@
   (let [weapon-section 500
         player-width (/ (- width weapon-section) (count players))
         weapon (get-current-weapon state)
-        player (get-current-player state)]
+        player (get-current-player state)
+        description-height 30
+        blob-height (- info-height description-height)]
+
     (.setColor g Color/DARK_GRAY)
     (.fillRect g 0 height width info-height)
-    (.setColor g Color/BLACK)
-    (.fillRect g (- width weapon-section) height weapon-section info-height)
-    (.setColor g Color/WHITE)
+    (when (< (:cash player) (:cost weapon))
+      (.setColor g Color/WHITE)
+      (.fillRect g (- width weapon-section) (+ height description-height) weapon-section blob-height))
+    (text [(/ width 2) (int (+ height (* description-height 1/2)))]
+          (str "Keys: [< > ⏎]   " (:description weapon)) Color/WHITE 25 Font/PLAIN)
     (text [(- width (* weapon-section 1/2))
-           (int (+ height (* info-height 1/2)))]
+           (int (+ height description-height (* blob-height 1/2)))]
           (str
             (if (pos? (:cost weapon)) "-" "+")
             "$" (Math/abs (:cost weapon)) " : " (:label weapon))
@@ -457,11 +471,11 @@
       (let [corner-diameter 40
             h-inset 15
             xc (* player-width (+ idx 1/2))
-            yc (+ height (/ info-height 2))
+            yc (+ height description-height (* blob-height 1/2))
             message (str label ": $" (int cash) " / " score "pts.")
             raw-label-width (-> g .getFontMetrics (.getStringBounds message g) .getWidth)
             label-width (+ raw-label-width h-inset h-inset)
-            label-height info-height
+            label-height blob-height
             left (- xc (/ label-width 2))
             top (- yc (/ label-height 2))]
         (.setColor g color)
