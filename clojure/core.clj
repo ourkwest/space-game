@@ -125,7 +125,8 @@
              (int (- y radius))
              (int (inc (* radius 2)))
              (int (inc (* radius 2)))
-             (- 180 (* 180 proportion)) (+ 180 (* 180 proportion)))))
+             (- -90 (* 180 proportion))
+             (* 360 proportion))))
 
 (defn outlined-circle "Draw a solid circle and outline it in black."
   ([[x y] radius color] (outlined-circle x y radius color))
@@ -194,6 +195,11 @@
                                (* y-diff y-diff)))]
     [angle distance]))
 
+(defn v-scale [[x y] size]
+  (let [current-size (Math/sqrt (+ (* x x) (* y y)))]
+    [(-> x (* size) (/ current-size))
+     (-> y (* size) (/ current-size))]))
+
 (defn calculate-gravity
   "Returns a vector representing the attractive force between two bodies."
   [position-of-mass size-of-mass position]
@@ -203,6 +209,10 @@
         force-x (* force (Math/cos angle))
         force-y (* force (Math/sin angle))]
     [force-x force-y]))
+
+(defn clear-screen [{:keys [bg-color width height info-height]}] ; todo: use this elsewhere!
+  (.setColor g bg-color)
+  (.fillRect g 0 0 width (+ height info-height)))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -225,8 +235,8 @@
 (defn new-singularity "Creates a new black or white hole."
   [point]
   (let [[lifecycle color] (if (< 0.75 (rand))
-                            [(range -25 -2 0.4) Color/WHITE]
-                            [(range 25 2 -0.3) Color/BLACK])]
+                            [(range -25 -2 0.3) Color/WHITE]
+                            [(range 25 2 -0.2) Color/BLACK])]
     {:p         point
      :size      (first lifecycle)
      :lifecycle lifecycle
@@ -252,7 +262,7 @@
                :current-player 0
                :current-phase :menu))
 
-(def colors
+(def colors ; TODO: 1st and 6th look almost identical!!!
   (->> (for [h (range 0.0 2.9 0.4)]
          (Color/getHSBColor h 1.0 1.0))
        (map (fn [^Color c]
@@ -262,41 +272,57 @@
        (reverse)))
 
 (def weapons
-  [{:id    :pass
-    :label "Pass"
-    :description "Pass play to the next player. Gain $30."
-    :cost  -30
-    :color (Color. (Integer/decode "#FFFFFF"))}
-   {:id    :invest
-    :label "Invest"
-    :description "Invest $10 to receive $1 for each of the next 20 turns."
-    :cost  10
-    :color (Color. (Integer/decode "#77C1FF"))}
-   {:id    :heal
-    :label "Repair"
-    :description "Gain 10% health for $10."
-    :cost  10
-    :color (Color. (Integer/decode "#26D900"))}
-   {:id    :big-gun
-    :label "The Big One"
-    :description "Detonates on impact or when you press Enter [⏎]."
-    :cost  100
-    :color (Color. (Integer/decode "#FF0000"))}
-   {:id    :cheap-gun
-    :label "The Cheap One"
-    :description "Detonates on impact."
-    :cost  20
-    :color (Color. (Integer/decode "#FDA46D"))}
-   {:id    :shot-gun
-    :label "Shotgun"
-    :description "A spread of smaller fragments."
-    :cost  60
-    :color (Color. (Integer/decode "#1100FF"))}
-   {:id    :guided-shot
-    :label "Guided Missile"
-    :description "Can be steered with the arrow keys [◀ ▶]. Low power recommended!"
-    :cost  80
-    :color (Color. (Integer/decode "#FFEA00"))}])
+  (->> [{:id          :pass
+         :category    :pass
+         :label       "Pass"
+         :description "Pass play to the next player. Gain $30."
+         :cost        -30
+         :color       (Color. (Integer/decode "#FFFFFF"))}
+        {:id          :invest
+         :category    :support
+         :label       "Invest"
+         :description "Invest $10 to receive $1 for each of the next 20 turns."
+         :cost        10
+         :color       (Color. (Integer/decode "#77C1FF"))}
+        {:id          :heal
+         :category    :support
+         :label       "Repair"
+         :description "Gain 10% health for $10."
+         :cost        10
+         :color       (Color. (Integer/decode "#26D900"))}
+        {:id          :big-gun
+         :category    :weapon
+         :label       "The Big One"
+         :description "Detonates on impact or when you press Enter [⏎]."
+         :cost        101
+         :color       (Color. (Integer/decode "#FF0000"))}
+        {:id          :cheap-gun
+         :category    :weapon
+         :label       "The Cheap One"
+         :description "Detonates on impact."
+         :cost        25
+         :color       (Color. (Integer/decode "#FDA46D"))}
+        {:id          :shot-gun
+         :category    :weapon
+         :label       "Shotgun"
+         :description "A spread of smaller fragments."
+         :cost        40
+         :color       (Color. (Integer/decode "#1100FF"))}
+        {:id          :guided-shot
+         :category    :weapon
+         :label       "Guided Missile"
+         :description "Can be steered with the arrow keys [◀ ▶]. Low power recommended!"
+         :cost        60
+         :color       (Color. (Integer/decode "#FFEA00"))}
+        {:id          :laser
+         :category    :weapon
+         :label       "Laser Beam"
+         :description "Can be aimed with the arrow keys [◀ ▶]."
+         :cost        30
+         :color       (Color. (Integer/decode "#FF00C3"))}]
+       (sort-by :label)
+       (sort-by :cost)
+       (sort-by :category)))
 
 (defn health->color [health]
   (if (< 50 health)
@@ -400,9 +426,10 @@
 
 (defn render-players [{:keys [players current-player bg-color current-phase]}]
   (doseq [[idx {:keys [p color angle power current-weapon health]}] (map-indexed vector players)]
-    (let [pf (+ player-radius (* gun-length (/ power 80)))
-          aiming? (and (= current-phase :aiming) (= idx current-player))
-          weapon (nth weapons current-weapon)]
+    (let [aiming? (and (= current-phase :aiming) (= idx current-player))
+          weapon (nth weapons current-weapon)
+          powered? (not= :laser (:id weapon))
+          pf (+ player-radius (* gun-length (/ (if powered? power 40) 80)))]
       (if-not (pos? health)
         (do (circle p (+ player-radius 3) Color/DARK_GRAY))
         (do
@@ -417,7 +444,7 @@
                 (+ (first p) (* (+ player-radius gun-length) (Math/sin (degrees->radians angle))))
                 (+ (second p) (* (+ player-radius gun-length) (Math/cos (degrees->radians angle)) -1))
                 Color/DARK_GRAY)
-          (when aiming?
+          (when (and aiming? powered?)
             (.setStroke g (BasicStroke. 6 BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
             (line (first p)
                   (second p)
@@ -428,9 +455,9 @@
           (.setStroke g (BasicStroke. 5))
           (outlined-circle p player-radius color)
           (.setStroke g (BasicStroke. 2))
-          (lined-circle p player-radius (health->color health))
+          (lined-circle p player-radius (health->color health) (/ health 100))
 
-          (when aiming?
+          (when (and aiming? powered?)
             (text (map + p [0 1.5]) (str power) Color/BLACK 23)))))))
 
 (defn render-singularities [{:keys [black-holes]}]
@@ -566,15 +593,22 @@
 (defn new-sparkle
   "A sudden white circle that rapidly shrinks."
   ([p size]
-   {:effect-type :sparkle :p p :size size})
-  ([p offset size]
+   {:effect-type :sparkle
+    :p           p
+    :size        size
+    :color       Color/WHITE})
+  ([p offset size] (new-sparkle p offset size Color/WHITE))
+  ([p offset size color]
    (let [angle (rand TAU)
          r (rand offset)
          v [(* r (Math/sin angle)) (* r (Math/cos angle))]]
-     (new-sparkle (map + p v) size))))
+     {:effect-type :sparkle
+      :p           (map + p v)
+      :size        size
+      :color       color})))
 
-(defmethod process-effect :sparkle [{:keys [p size] :as sparkle}]
-  (circle p size Color/WHITE)
+(defmethod process-effect :sparkle [{:keys [p size color] :as sparkle}]
+  (circle p size color)
   (when (pos? size)
     (update sparkle :size - 5)))
 
@@ -648,6 +682,10 @@
   (-> state
       (update-in [:players current-player :health] (fn [health] (min 100 (+ health 15))))
       (assoc :current-phase :aiming)))
+
+(defmethod weapon-firing :laser [{:keys [] :as state}]
+  (assoc state :current-phase :projecting
+               :laser-timeout 150))
 
 (defmethod weapon-firing :shot-gun [{:keys [bg-color] :as state}]
   (let [{:keys [angle power color p]} (get-current-player state)
@@ -766,17 +804,83 @@
               (< (- size) (second last-trail-p) (+ height size)))
          true)))
 
-(defn damage-players [players projectiles]
+(defn damage-players [players objects-with-player-damages]
   (reduce (fn [players [idx damage]]
             (let [{:keys [health p]} (nth players idx)
-                  health' (- health damage)
-                  effects (when-not (pos? health')
-                            (map #(new-boom p % 20 100) (range 40)))]
-              (update players idx assoc
-                      :health health'
-                      :effects effects)))
+                  health' (- health damage)]
+              (if (pos? health)
+                (update players idx assoc
+                        :health health'
+                        :effects (when-not (pos? health')
+                                   (map #(new-boom p % 20 100) (range 40))))
+                players)))
           players
-          (mapcat :player-damages projectiles)))
+          (mapcat :player-damages objects-with-player-damages)))
+
+(defmethod weapon-projecting :laser [{:keys [current-player players laser-timeout black-holes effects] :as state}]
+  ; power = cost / second + damage / second , but higher power should be more cost effective
+  (if (pos? laser-timeout)
+    (let [{:keys [angle p]} (get-current-player state)
+          angle' (cond-> angle
+                   (is-held? 39) (+ 0.1)
+                   (is-held? 37) (- 0.1))
+          weapon (get-current-weapon state)
+          color (rgba-lerp (:color weapon) (set-alpha (:color weapon) 0) 0.5)
+          sparkle-color (rgba-lerp color (set-alpha Color/WHITE 0) 0.25)
+          max-strength 110
+          path (take-while (comp pos? :strength)
+                           (iterate
+                             (fn [{:keys [p dp strength]}]
+                               (let [p' (map + p dp)
+                                     player-damage (first
+                                                     (keep-indexed
+                                                       (fn [idx player]
+                                                         (when (hit-detected? p (:p player) (inc (:size player)))
+                                                           [idx (/ strength max-strength 2.25)]))
+                                                       players))]
+                                 (if player-damage
+                                   {:p              p'
+                                    :dp             (v-scale (map + dp (gravity-force p' black-holes)) 20)
+                                    :strength       (min 1 (dec strength))
+                                    :player-damages [player-damage]
+                                    :effects        [(new-sparkle (map - p dp)
+                                                                  (+ 5 (* 10 (second player-damage)))
+                                                                  (+ 5 (* 10 (second player-damage)))
+                                                                  sparkle-color)]}
+                                   {:p              p'
+                                    :dp             (map + dp (gravity-force p' black-holes))
+                                    :strength       (dec strength)})))
+                             {:p        (projectile-starting-point p angle')
+                              :dp       (projectile-starting-speed 100 angle')
+                              :strength max-strength}))]
+
+      (clear-screen state)
+      (doseq [[p1 p2] (partition 2 1 (butlast path))]
+        (.setStroke g (BasicStroke. (* (:strength p1) 1/10) BasicStroke/CAP_BUTT BasicStroke/JOIN_MITER))
+        (line (:p p1) (:p p2) color))
+
+      #_(reduce (fn [hit? [p1 p2]]
+                (first (keep-indexed (fn [idx player]
+                                       (when (hit-detected? p1 (:p player) (:size player))
+                                         [idx 1])) players))
+                )
+              false
+              (partition 2 1 path))
+
+      (render-players state)
+      (render-singularities state)
+
+      (Thread/sleep 10)
+
+      (let [players' (damage-players players [(last path)])
+            player-effects (mapcat :effects players')
+            players'' (mapv #(dissoc % :effects) players')]
+        (-> state
+            (assoc :effects (process-effects (concat effects player-effects (:effects (last path)))))
+            (assoc :laser-timeout (dec laser-timeout))
+            (assoc :players players'')
+            (assoc-in [:players current-player :angle] angle'))))
+    (assoc state :current-phase :progressing)))
 
 (defmethod weapon-projecting :shot-gun [{:keys [projection black-holes bg-color players] :as state}]
   (let [{:keys [projectiles limit effects]} projection
@@ -1058,10 +1162,6 @@
               (pprint/pprint state)))
       (throw e))))
 
-(defn clear-screen [{:keys [bg-color width height info-height]}] ; todo: use this elsewhere!
-  (.setColor g bg-color)
-  (.fillRect g 0 0 width (+ height info-height)))
-
 (defn game-loop []
   (loop [state (initial-state width height)]
     ; TODO: catch exceptions and log state!!!
@@ -1076,14 +1176,15 @@
 
 ; TODO: ideas
 ; different shot types
+; * guided shot, you can steer it a bit as it goes - DONE
+; * spread shot - DONE
 ; * parachute shot - slows down
-; * guided shot, you can steer it a bit as it goes
 ; * timed shot, you set the fuse
 ; * proximity shot, blows up when it starts getting further away from an enemy
 ; * braking shot, you can control the braking as it goes
 ; * cluster burst shot
-; * spread shot - DONE
 ; * barrier shot, creates a barrier
+; * laser?
 ; health
 ; * shots don't completely destroy you - DONE
 ; destroyable barriers
